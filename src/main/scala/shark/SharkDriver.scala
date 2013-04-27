@@ -18,9 +18,7 @@
 package shark
 
 import java.util.{ArrayList => JavaArrayList, List => JavaList, Date}
-
 import scala.collection.JavaConversions._
-
 import org.apache.hadoop.hive.conf.HiveConf
 import org.apache.hadoop.hive.metastore.api.Schema
 import org.apache.hadoop.hive.ql.{Context, Driver, QueryPlan}
@@ -33,10 +31,12 @@ import org.apache.hadoop.hive.ql.plan._
 import org.apache.hadoop.hive.ql.session.SessionState
 import org.apache.hadoop.hive.serde2.{SerDe, SerDeUtils}
 import org.apache.hadoop.util.StringUtils
-
 import shark.execution.{SharkExplainTask, SharkExplainWork, SparkTask, SparkWork, TableRDD}
 import shark.memstore.ColumnarSerDe
 import shark.parse.{QueryContext, SharkSemanticAnalyzerFactory}
+import spark.RDD
+import shark.parse.BlinkDbSemanticAnalyzerFactory
+import com.google.common.base.Preconditions
 
 
 /**
@@ -112,9 +112,70 @@ object SharkDriver extends LogHelper {
 }
 
 
-class BootstrapDriver(conf: HiveConf) extends SharkDriver(conf) {
+class BootstrapRunner(conf: HiveConf) {
   def runForResult(cmd: String): String = {
+    val inputRdd: RDD[_] = makeInputRdd(cmd)
+    doBootstrap(cmd, inputRdd)
+  }
+  
+  private def makeInputRdd(cmd: String): RDD[_] = {
+    val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.InputExtraction, conf)
+    val sinkOperators: Seq[shark.execution.Operator[_]] = BootstrapRunner.getSinkOperators(sem)
+    BootstrapRunner.initializeOperatorTree(BootstrapRunner.getSourceOperators(sem))
     
+    Preconditions.checkState(sinkOperators.size == 1)
+    sinkOperators(0).execute() //TODO: Handle more than 1 sink.
+  }
+  
+  private def doBootstrap(cmd: String, inputRdd: RDD[_]): String = {
+    val resampleRdds = 
+    
+    val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf)
+    val sinkOperators: Seq[shark.execution.Operator[_]] = BootstrapRunner.getSinkOperators(sem)
+    BootstrapRunner.initializeOperatorTree(BootstrapRunner.getSourceOperators(sem))
+    
+    Preconditions.checkState(sinkOperators.size == 1)
+    sinkOperators(0).execute() //TODO: Handle more than 1 sink.
+  }
+  
+  
+}
+
+object BootstrapRunner {
+  private def doSemanticAnalysis(cmd: String, stage: BootstrapStage, conf: HiveConf): BaseSemanticAnalyzer = {
+    val command = new VariableSubstitution().substitute(conf, cmd)
+    val ctx = new Context(conf)
+    ctx.setTryCount(Integer.MAX_VALUE)
+    ctx.setCmd(command)
+
+    val pd = new ParseDriver()
+    val tree = ParseUtils.findRootNonNullToken(pd.parse(command, ctx))
+
+    val sem = BlinkDbSemanticAnalyzerFactory.get(conf, tree, stage)
+    //TODO: Currently I do not include configured SemanticAnalyzer hooks.
+    sem.analyze(tree, ctx)
+    sem.validate()
+    sem
+  }
+  
+  private def getSourceOperators(sem: BaseSemanticAnalyzer): Seq[shark.execution.Operator[_]] = {
+    sem
+      .getRootTasks()
+      .flatMap(_.getTopOperators().map(_.asInstanceOf[shark.execution.Operator[_]]))
+      .flatMap(_.returnTopOperators())
+      .distinct
+  }
+  
+  private def getSinkOperators(sem: BaseSemanticAnalyzer): Seq[shark.execution.Operator[_]] = {
+    getSourceOperators(sem).flatMap(_.returnTerminalOperators()).distinct
+  }
+  
+  // Initialize @topOperators and all operators below them in the operator
+  // tree.  After this, it is okay to call execute() on any operator in this
+  // tree.
+  private def initializeOperatorTree(topOperators: Seq[shark.execution.Operator[_]]): Unit = {
+    //TODO
+    Unit
   }
 }
 
@@ -166,9 +227,8 @@ class SharkDriver(conf: HiveConf) extends Driver(conf) with LogHelper {
   }
   
   private def runBootstrap(cmd: String): String = {
-    val bootstrapDriver = new BootstrapDriver(conf)
-    bootstrapDriver.init()
-    bootstrapDriver.runForResult(cmd)
+    val bootstrapRunner = new BootstrapRunner(conf)
+    bootstrapRunner.runForResult(cmd)
   }
 
   /**
