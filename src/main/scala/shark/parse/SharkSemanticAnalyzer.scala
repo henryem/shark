@@ -54,6 +54,26 @@ class SharkSemanticAnalyzer(conf: HiveConf) extends SemanticAnalyzer(conf) with 
 
   var _resSchema: JavaList[FieldSchema] = null
 
+   /**
+    * A map from each post-input scan operator in the operator graph to its
+    * child or children in the operator graph.  For example, a typical graph
+    * will look like this:
+    * 
+    * ( TableScanOperator )
+    *           |
+    * ( SelectOperator    )
+    *           |
+    * ( CacheSinkOperator )
+    * 
+    * ( RddScanOperator   )
+    * 
+    * 
+    * This is set only after analyze() is called, and only if conf.doBootstrap .
+    */
+  def getPostInputScanOperators(): Map[Operator, Seq[Operator]] = {
+    
+  }
+  
   /**
    * This is used in driver to get the result schema.
    */
@@ -159,7 +179,7 @@ class SharkSemanticAnalyzer(conf: HiveConf) extends SemanticAnalyzer(conf) with 
     // Hive optimization.
     val hiveSinkOps = SharkSemanticAnalyzer.findAllHiveFileSinkOperators(
       pCtx.getTopOps().values().head)
-
+      
     if (hiveSinkOps.size == 1) {
       // For a single output, we have the option of choosing the output
       // destination (e.g. CTAS with table property "shark.cache" = "true").

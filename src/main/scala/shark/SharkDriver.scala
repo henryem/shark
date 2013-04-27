@@ -112,6 +112,12 @@ object SharkDriver extends LogHelper {
 }
 
 
+class BootstrapDriver(conf: HiveConf) extends SharkDriver(conf) {
+  def runForResult(cmd: String): String = {
+    
+  }
+}
+
 /**
  * The driver to execute queries in Shark.
  */
@@ -152,6 +158,17 @@ class SharkDriver(conf: HiveConf) extends Driver(conf) with LogHelper {
       }
       case _ => null
     }
+  }
+  
+  override def run(cmd: String): Unit = {
+    super.run(cmd)
+    runBootstrap(cmd)
+  }
+  
+  private def runBootstrap(cmd: String): String = {
+    val bootstrapDriver = new BootstrapDriver(conf)
+    bootstrapDriver.init()
+    bootstrapDriver.runForResult(cmd)
   }
 
   /**
