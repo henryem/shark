@@ -19,10 +19,12 @@ package shark.execution
 
 import scala.collection.JavaConversions._
 import scala.reflect.BeanProperty
-
 import org.apache.hadoop.hive.ql.exec.{ExprNodeEvaluator, ExprNodeEvaluatorFactory}
 import org.apache.hadoop.hive.ql.exec.{SelectOperator => HiveSelectOperator}
 import org.apache.hadoop.hive.ql.plan.SelectDesc
+import java.util.Arrays
+import scala.util.Random
+import shark.memstore.ColumnarStruct
 
 
 /**

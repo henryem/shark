@@ -84,10 +84,10 @@ with java.io.Serializable with LogHelper {
     //ExplainTaskHelper.outputPlan(terminalOp, Console.out, true, 2)
     //ExplainTaskHelper.outputPlan(hiveTopOps.head, Console.out, true, 2)
 
-    initializeTableScanTableDesc(tableScanOps)
+    SparkTask.initializeTableScanTableDesc(tableScanOps, work)
 
     // Initialize the Hive query plan. This gives us all the object inspectors.
-    initializeAllHiveOperators(terminalOp)
+    SparkTask.initializeAllHiveOperators(terminalOp)
 
     terminalOp.initializeMasterOnAll()
 
@@ -97,7 +97,17 @@ with java.io.Serializable with LogHelper {
     0
   }
 
-  def initializeTableScanTableDesc(topOps: Seq[TableScanOperator]) {
+  override def getType = StageType.MAPRED
+
+  override def getName = "MAPRED-SPARK"
+
+  override def localizeMRTmpFilesImpl(ctx: Context) = Unit
+
+}
+
+object SparkTask {
+  
+  def initializeTableScanTableDesc(topOps: Seq[TableScanOperator], work: SparkWork) {
     // topToTable maps Hive's TableScanOperator to the Table object.
     val topToTable: JHashMap[HiveTableScanOperator, Table] = work.pctx.getTopToTable()
 
@@ -122,8 +132,8 @@ with java.io.Serializable with LogHelper {
       }
     }
   }
-
-  def initializeAllHiveOperators(terminalOp: TerminalOperator) {
+  
+  def initializeAllHiveOperators(terminalOp: TerminalOperator) = {
     // Need to guarantee all parents are initialized before the child.
     val topOpList = new scala.collection.mutable.MutableList[HiveTopOperator]
     val queue = new scala.collection.mutable.Queue[Operator[_]]
@@ -144,12 +154,5 @@ with java.io.Serializable with LogHelper {
       topOp.initializeHiveTopOperator()
     }
   }
-
-  override def getType = StageType.MAPRED
-
-  override def getName = "MAPRED-SPARK"
-
-  override def localizeMRTmpFilesImpl(ctx: Context) = Unit
-
 }
 

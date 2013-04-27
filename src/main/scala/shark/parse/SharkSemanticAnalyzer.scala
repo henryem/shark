@@ -53,7 +53,7 @@ import spark.storage.StorageLevel
 class SharkSemanticAnalyzer(conf: HiveConf) extends SemanticAnalyzer(conf) with LogHelper {
 
   var _resSchema: JavaList[FieldSchema] = null
-
+  
   /**
    * This is used in driver to get the result schema.
    */
@@ -166,6 +166,7 @@ class SharkSemanticAnalyzer(conf: HiveConf) extends SemanticAnalyzer(conf) with 
     // Hive optimization.
     val hiveSinkOps = SharkSemanticAnalyzer.findAllHiveFileSinkOperators(
       pCtx.getTopOps().values().head)
+<<<<<<< HEAD
 
     // TODO: clean the following code. It's too messy to understand...
     val terminalOpSeq = {
@@ -237,6 +238,26 @@ class SharkSemanticAnalyzer(conf: HiveConf) extends SemanticAnalyzer(conf) with 
     genMapRedTasks(qb, pctx, terminalOpSeq)
 
     logInfo("Completed plan generation")
+  }
+  
+  /**
+   *  Hook for subclasses to modify the operator graph before it is finalized
+   * (i.e. before it is broken into stages and before genMapRedTasks is called)
+   * in analyzeInternal.  This is a hack, of course.
+   */
+  def executePostAnalysisHooks(terminalOps: Seq[TerminalOperator]): Seq[shark.execution.TerminalOperator] = {
+    terminalOps
+  }
+  
+  /**
+   * Hook for subclasses to replace the TerminalOperator creation step with
+   * their own TerminalOperator.  The returned TerminalOperator should be
+   * connected to the rest of the graph.
+   * 
+   * @return None to pass on replacing the TerminalOperator.
+   */
+  def createOutputPlan(hiveOp: HiveOperator): Option[TerminalOperator] = {
+    None
   }
 
   /**

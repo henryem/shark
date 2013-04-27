@@ -18,7 +18,6 @@
 package shark.memstore2
 
 import java.util.{ArrayList => JArrayList, List => JList}
-
 import org.apache.hadoop.hive.serde2.`lazy`.LazyFactory
 import org.apache.hadoop.hive.serde2.`lazy`.LazySimpleSerDe.SerDeParameters
 import org.apache.hadoop.hive.serde2.objectinspector.{ObjectInspector, ObjectInspectorUtils,
@@ -26,8 +25,10 @@ import org.apache.hadoop.hive.serde2.objectinspector.{ObjectInspector, ObjectIns
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector.Category
 import org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory
 import org.apache.hadoop.hive.serde2.typeinfo.PrimitiveTypeInfo
-
 import shark.{SharkConfVars, SharkEnvSlave}
+import scala.collection.JavaConversions
+import org.apache.hadoop.hive.serde2.objectinspector.PrimitiveObjectInspector
+import org.apache.hadoop.hive.serde2.objectinspector.PrimitiveObjectInspector.PrimitiveCategory
 
 
 class ColumnarStructObjectInspector(fields: JList[StructField]) extends StructObjectInspector {
@@ -60,10 +61,7 @@ object ColumnarStructObjectInspector {
     for (i <- 0 until columnNames.size) {
       val typeInfo = columnTypes.get(i)
       val fieldOI = typeInfo.getCategory match {
-        case Category.PRIMITIVE => SharkEnvSlave.objectInspectorLock.synchronized {
-          PrimitiveObjectInspectorFactory.getPrimitiveWritableObjectInspector(
-            typeInfo.asInstanceOf[PrimitiveTypeInfo].getPrimitiveCategory)
-        }
+        case Category.PRIMITIVE => getPrimitiveOi(typeInfo.asInstanceOf[PrimitiveTypeInfo].getPrimitiveCategory)
         case _ => SharkEnvSlave.objectInspectorLock.synchronized {
           LazyFactory.createLazyObjectInspector(
             typeInfo, serDeParams.getSeparators(), 1, serDeParams.getNullSequence(),
@@ -73,6 +71,42 @@ object ColumnarStructObjectInspector {
       fields.add(new IDStructField(i, columnNames.get(i), fieldOI))
     }
     new ColumnarStructObjectInspector(fields)
+  }
+  
+  def getPrimitiveOi(primitiveCategory: PrimitiveCategory) = {
+    SharkEnvSlave.objectInspectorLock.synchronized {
+      PrimitiveObjectInspectorFactory.getPrimitiveWritableObjectInspector(primitiveCategory)
+    }
+  }
+  
+  /**
+   * Make a ColumnarStructObjectInspector that uses the same field schema as
+   * @oi.
+   */
+  def fromStructObjectInspector(oi: StructObjectInspector): ColumnarStructObjectInspector = {
+    val oiFields = oi.getAllStructFieldRefs()
+    val numOiFields = oiFields.size
+    val newFields = new JArrayList[StructField](numOiFields)
+    for (idx <- 0 until numOiFields) {
+      val originalField = oiFields.get(idx)
+      val originalFieldOi = originalField.getFieldObjectInspector()
+      val newFieldOi = originalFieldOi.getCategory() match {
+        //FIXME: Formatting
+        case Category.PRIMITIVE => getPrimitiveOi(originalFieldOi.asInstanceOf[PrimitiveObjectInspector].getPrimitiveCategory())
+        case _ => {
+          //TODO: Might need to force LazyObjectInspector explicitly
+          // for these types.
+          originalFieldOi
+        }
+      }
+      val newField = new IDStructField(
+          idx,
+          originalField.getFieldName(),
+          newFieldOi,
+          originalField.getFieldComment())
+      newFields.add(newField)
+    }
+    new ColumnarStructObjectInspector(newFields)
   }
 
   class IDStructField(

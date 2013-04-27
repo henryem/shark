@@ -88,8 +88,24 @@ abstract class Operator[T <: HiveOperator] extends LogHelper with Serializable {
   }
 
   def addChild(child: Operator[_]) = child.addParent(this)
+  
+  /** 
+   * Remove all parents from this operator.  Note that this operator must be
+   * separately removed as a child from each parent.
+   */
+  def clearParents() {
+    if (_parentOperators != null) {
+      _parentOperators.clear()
+    }
+  }
+  
+  def clearChildren() {
+    if (_childOperators != null) {
+      _childOperators.clear()
+    }
+  }
 
-  def returnTerminalOperators(): Seq[Operator[_]] = {
+  def returnTerminalOperators(): Seq[Operator[_ <: HiveOperator]] = {
     if (_childOperators == null || _childOperators.size == 0) {
       Seq(this)
     } else {
@@ -97,7 +113,7 @@ abstract class Operator[T <: HiveOperator] extends LogHelper with Serializable {
     }
   }
 
-  def returnTopOperators(): Seq[Operator[_]] = {
+  def returnTopOperators(): Seq[Operator[_ <: HiveOperator]] = {
     if (_parentOperators == null || _parentOperators.size == 0) {
       Seq(this)
     } else {

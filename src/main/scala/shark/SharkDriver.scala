@@ -18,9 +18,7 @@
 package shark
 
 import java.util.{ArrayList => JavaArrayList, List => JavaList, Date}
-
 import scala.collection.JavaConversions._
-
 import org.apache.hadoop.hive.conf.HiveConf
 import org.apache.hadoop.hive.metastore.api.Schema
 import org.apache.hadoop.hive.ql.{Context, Driver, QueryPlan}
@@ -39,6 +37,22 @@ import shark.api.QueryExecutionException
 import shark.execution.{SharkExplainTask, SharkExplainWork, SparkTask, SparkWork}
 import shark.memstore2.ColumnarSerDe
 import shark.parse.{QueryContext, SharkSemanticAnalyzerFactory}
+import spark.RDD
+import edu.berkeley.blbspark.WeightedItem
+import edu.berkeley.blbspark.StratifiedBlb
+import org.apache.hadoop.hive.ql.processors.CommandProcessorResponse
+import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
+import shark.execution.RowWrapper
+import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector
+import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector.Category
+import shark.execution.HiveOperator
+import shark.execution.serialization.KryoSerializer
+import org.apache.hadoop.hive.serde2.objectinspector.PrimitiveObjectInspector
+import blinkdb.BootstrapRunner
+import blinkdb.StandardDeviationErrorQuantifier
+import blinkdb.ErrorAnalysisRunner
+import blinkdb.BlinkDbConf
+import blinkdb.ErrorAnalysisConf
 
 
 /**
@@ -112,6 +126,8 @@ object SharkDriver extends LogHelper {
 }
 
 
+
+
 /**
  * The driver to execute queries in Shark.
  */
@@ -156,6 +172,18 @@ class SharkDriver(conf: HiveConf) extends Driver(conf) with LogHelper {
       }
       case _ => null
     }
+  }
+  
+  override def run(cmd: String): CommandProcessorResponse = {
+    val response = super.run(cmd)
+    val errorAnalysis = runErrorAnalysis(cmd).map(analysisMessage => "Error analysis: %s".format(analysisMessage))
+    println(errorAnalysis.getOrElse("No error analysis will be run for this query.")) //FIXME: Don't just print this here.
+    response
+  }
+  
+  private def runErrorAnalysis(cmd: String): Option[String] = {
+    val errorAnalysisConf = BlinkDbConf.fromJavaOpts().errorAnalysisConf
+    ErrorAnalysisRunner.runForResult(cmd, StandardDeviationErrorQuantifier, conf, errorAnalysisConf).map(_.toString)
   }
 
   /**
