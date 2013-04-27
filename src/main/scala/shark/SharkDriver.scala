@@ -179,6 +179,23 @@ object BootstrapRunner {
   }
 }
 
+object ResampleGenerator {
+  def generateResamples(originalRdd: RDD[_]): Seq[RDD[_]] = {
+    val originalTableWithWeights: RDD[WeightedItem[_]] = originalRdd.map(toWeightedRow)
+    //TODO: Use BLB instead of bootstrap here.
+    val resamples: Seq[RDD[WeightedItem[Any]]] = StratifiedBlb.createBootstrapResamples(
+        originalTableWithWeights, // rdd
+        BlinkDbUtils.NUM_BOOTSTRAP_RESAMPLES,
+        originalTableWithWeights.partitions.length,
+        012 //FIXME: Random seed here.
+        )
+  }
+  
+  private def toWeightedRow(row: Any): WeightedItem[_] = {
+    
+  }
+}
+
 /**
  * The driver to execute queries in Shark.
  */
