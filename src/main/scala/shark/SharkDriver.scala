@@ -36,7 +36,15 @@ import shark.memstore.ColumnarSerDe
 import shark.parse.{QueryContext, SharkSemanticAnalyzerFactory}
 import spark.RDD
 import shark.parse.BlinkDbSemanticAnalyzerFactory
-import com.google.common.base.Preconditions
+import edu.berkeley.blbspark.WeightedItem
+import edu.berkeley.blbspark.StratifiedBlb
+import org.apache.hadoop.hive.ql.processors.CommandProcessorResponse
+import shark.parse.InputExtractionSemanticAnalyzer
+import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
+import shark.execution.RowWrapper
+import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector
+import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector.Category
+import shark.execution.HiveOperator
 
 
 /**
@@ -113,47 +121,60 @@ object SharkDriver extends LogHelper {
 
 
 class BootstrapRunner(conf: HiveConf) {
-  def runForResult(cmd: String): String = {
-    val inputRdd: RDD[_] = makeInputRdd(cmd)
-    doBootstrap(cmd, inputRdd)
+  def runForResult(cmd: String): Option[String] = {
+    val inputRdd: Option[RDD[Any]] = makeInputRdd(cmd)
+    inputRdd.map(rdd => doBootstrap(cmd, rdd))
   }
   
-  private def makeInputRdd(cmd: String): RDD[_] = {
-    val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.InputExtraction, conf)
-    val sinkOperators: Seq[shark.execution.Operator[_]] = BootstrapRunner.getSinkOperators(sem)
-    BootstrapRunner.initializeOperatorTree(BootstrapRunner.getSourceOperators(sem))
+  private def makeInputRdd(cmd: String): Option[RDD[Any]] = {
+    val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.InputExtraction, conf, None)
+    if (!sem.isInstanceOf[InputExtractionSemanticAnalyzer]) {
+      //HACK
+      None
+    } else {
+      val intermediateInputOperators: Seq[shark.execution.Operator[_]] = BootstrapRunner.getIntermediateInputOperators(sem)
+      BootstrapRunner.initializeOperatorTree(sem)
     
-    Preconditions.checkState(sinkOperators.size == 1)
-    sinkOperators(0).execute() //TODO: Handle more than 1 sink.
+      //TODO: Handle more than 1 sink.
+      require(intermediateInputOperators.size == 1)
+      Some(intermediateInputOperators(0).execute().asInstanceOf[RDD[Any]]) //FIXME: Not sure if this cast is legitimate.
+    }
   }
   
-  private def doBootstrap(cmd: String, inputRdd: RDD[_]): String = {
-    val resampleRdds = 
-    
-    val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf)
-    val sinkOperators: Seq[shark.execution.Operator[_]] = BootstrapRunner.getSinkOperators(sem)
-    BootstrapRunner.initializeOperatorTree(BootstrapRunner.getSourceOperators(sem))
-    
-    Preconditions.checkState(sinkOperators.size == 1)
-    sinkOperators(0).execute() //TODO: Handle more than 1 sink.
+  private def doBootstrap(cmd: String, inputRdd: RDD[Any]): String = {
+    val resampleRdds = ResampleGenerator.generateResamples(inputRdd, BootstrapRunner.NUM_BOOTSTRAP_RESAMPLES)
+    val resultRdds = resampleRdds.map({ resampleRdd => 
+      //TODO: Reuse semantic analysis across runs.
+      val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf, Some(resampleRdd))
+      val sinkOperators: Seq[shark.execution.Operator[_]] = BootstrapRunner.getSinkOperators(sem)
+      BootstrapRunner.initializeOperatorTree(sem)
+      //TODO: Handle more than 1 sink.
+      require(sinkOperators.size == 1, "During bootstrap: Found %d sinks, expected 1.".format(sinkOperators.size))
+      val sinkOperator = sinkOperators(0).asInstanceOf[shark.execution.TerminalOperator]
+      (sinkOperator.execute(), sinkOperator.objectInspector)
+    })
+    val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf, None)
+    val bootstrapOutputs = BootstrapRunner.collectBootstrapOutputs(resultRdds, sem)
+    BootstrapRunner.computeErrorQuantification(bootstrapOutputs).toString
   }
   
   
 }
 
 object BootstrapRunner {
-  private def doSemanticAnalysis(cmd: String, stage: BootstrapStage, conf: HiveConf): BaseSemanticAnalyzer = {
+  val NUM_BOOTSTRAP_RESAMPLES = 50
+  
+  private def doSemanticAnalysis(cmd: String, stage: BootstrapStage, conf: HiveConf, inputRdd: Option[RDD[Any]]): BaseSemanticAnalyzer = {
     val command = new VariableSubstitution().substitute(conf, cmd)
-    val ctx = new Context(conf)
-    ctx.setTryCount(Integer.MAX_VALUE)
-    ctx.setCmd(command)
+    val context = new QueryContext(conf, false)
+    context.setCmd(cmd)
+    context.setTryCount(Integer.MAX_VALUE)
 
-    val pd = new ParseDriver()
-    val tree = ParseUtils.findRootNonNullToken(pd.parse(command, ctx))
-
-    val sem = BlinkDbSemanticAnalyzerFactory.get(conf, tree, stage)
+    val tree = ParseUtils.findRootNonNullToken((new ParseDriver()).parse(command, context))
+    val sem = BlinkDbSemanticAnalyzerFactory.get(conf, tree, stage, inputRdd)
+    
     //TODO: Currently I do not include configured SemanticAnalyzer hooks.
-    sem.analyze(tree, ctx)
+    sem.analyze(tree, context)
     sem.validate()
     sem
   }
@@ -161,7 +182,7 @@ object BootstrapRunner {
   private def getSourceOperators(sem: BaseSemanticAnalyzer): Seq[shark.execution.Operator[_]] = {
     sem
       .getRootTasks()
-      .flatMap(_.getTopOperators().map(_.asInstanceOf[shark.execution.Operator[_]]))
+      .map(_.getWork().asInstanceOf[SparkWork].terminalOperator.asInstanceOf[shark.execution.TerminalOperator])
       .flatMap(_.returnTopOperators())
       .distinct
   }
@@ -170,29 +191,80 @@ object BootstrapRunner {
     getSourceOperators(sem).flatMap(_.returnTerminalOperators()).distinct
   }
   
-  // Initialize @topOperators and all operators below them in the operator
-  // tree.  After this, it is okay to call execute() on any operator in this
-  // tree.
-  private def initializeOperatorTree(topOperators: Seq[shark.execution.Operator[_]]): Unit = {
-    //TODO
-    Unit
+  private def getIntermediateInputOperators(sem: BaseSemanticAnalyzer): Seq[shark.execution.Operator[_]] = {
+    //HACK
+    Seq(sem.asInstanceOf[InputExtractionSemanticAnalyzer].intermediateInputOperator.asInstanceOf[shark.execution.Operator[_ <: HiveOperator]])
+  }
+  
+  // Initialize all operators in the operator tree contained in @sem.  After
+  // this, it is okay to call execute() on any operator in this tree.
+  private def initializeOperatorTree(sem: BaseSemanticAnalyzer): Unit = {
+    val executionTask = sem.getRootTasks().apply(0)
+    require(executionTask.isInstanceOf[SparkTask])
+    val work = executionTask.getWork()
+    require(work.isInstanceOf[SparkWork])
+    val terminalOp = work.asInstanceOf[SparkWork].terminalOperator
+    val tableScanOps = terminalOp.returnTopOperators().asInstanceOf[Seq[shark.execution.TableScanOperator]]
+    SparkTask.initializeTableScanTableDesc(tableScanOps, work.asInstanceOf[SparkWork])
+    SparkTask.initializeAllHiveOperators(terminalOp)
+    terminalOp.initializeMasterOnAll()
+  }
+  
+  private def collectBootstrapOutputs(outputRdds: Seq[(RDD[_], ObjectInspector)], sem: BaseSemanticAnalyzer): Seq[Double] = {
+    outputRdds
+      .par
+      .map({ case (outputRdd, objectInspector) => 
+        val rawOutputs = outputRdd.collect()
+        //TODO: Support multi-row outputs (e.g. group-bys)
+        require(rawOutputs.size == 1, "Currently only queries with single-row outputs are supported!")
+        toNumericOutput(rawOutputs(0), objectInspector)
+      })
+      .seq
+  }
+  
+  private def toNumericOutput(rawOutput: Any, objectInspector: ObjectInspector): Double = {
+    //FIXME: Make sure the first field is actually a double.
+    require(objectInspector.getCategory() == Category.STRUCT)
+    new RowWrapper(rawOutput, Map(), objectInspector.asInstanceOf[StructObjectInspector]).getDouble(0)
+  }
+  
+  private def computeErrorQuantification(bootstrapOutputs: Seq[Double]): Double = {
+    //TODO: Define a BootstrapOutput class instead.
+    standardDeviation(bootstrapOutputs)
+  }
+  
+  private def standardDeviation(numbers: Seq[Double]): Double = {
+    //TODO: This is inefficient.
+    val count = numbers.size
+    val sum = numbers.sum
+    val sumSq = numbers.map(number => number*number).sum
+    if (count == 0) {
+      0.0
+    } else {
+      math.sqrt((sumSq - sum*sum/count) / count)
+    }
   }
 }
 
 object ResampleGenerator {
-  def generateResamples(originalRdd: RDD[_]): Seq[RDD[_]] = {
-    val originalTableWithWeights: RDD[WeightedItem[_]] = originalRdd.map(toWeightedRow)
+  def generateResamples[I: ClassManifest](originalRdd: RDD[I], numResamples: Int): Seq[RDD[I]] = {
+    val originalTableWithWeights: RDD[WeightedItem[I]] = originalRdd.map(toWeightedRow)
     //TODO: Use BLB instead of bootstrap here.
-    val resamples: Seq[RDD[WeightedItem[Any]]] = StratifiedBlb.createBootstrapResamples(
-        originalTableWithWeights, // rdd
-        BlinkDbUtils.NUM_BOOTSTRAP_RESAMPLES,
+    val resamples: Seq[RDD[WeightedItem[I]]] = StratifiedBlb.createBootstrapResamples(
+        originalTableWithWeights,
+        numResamples,
         originalTableWithWeights.partitions.length,
         012 //FIXME: Random seed here.
         )
+     resamples.map(_.map(fromWeightedRow))
   }
   
-  private def toWeightedRow(row: Any): WeightedItem[_] = {
-    
+  private def toWeightedRow[I](row: I): WeightedItem[I] = {
+    WeightedItem(row, 1.0)
+  }
+  
+  private def fromWeightedRow[I](weightedRow: WeightedItem[I]): I = {
+    weightedRow.item //TODO: Currently weights are ignored!
   }
 }
 
@@ -238,12 +310,13 @@ class SharkDriver(conf: HiveConf) extends Driver(conf) with LogHelper {
     }
   }
   
-  override def run(cmd: String): Unit = {
-    super.run(cmd)
-    runBootstrap(cmd)
+  override def run(cmd: String): CommandProcessorResponse = {
+    val response = super.run(cmd)
+//    println(runBootstrap(cmd).getOrElse("No bootstrap will be run for this query.")) //FIXME: Don't just print this here.
+    response
   }
   
-  private def runBootstrap(cmd: String): String = {
+  private def runBootstrap(cmd: String): Option[String] = {
     val bootstrapRunner = new BootstrapRunner(conf)
     bootstrapRunner.runForResult(cmd)
   }

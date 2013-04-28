@@ -53,26 +53,6 @@ import spark.storage.StorageLevel
 class SharkSemanticAnalyzer(conf: HiveConf) extends SemanticAnalyzer(conf) with LogHelper {
 
   var _resSchema: JavaList[FieldSchema] = null
-
-   /**
-    * A map from each post-input scan operator in the operator graph to its
-    * child or children in the operator graph.  For example, a typical graph
-    * will look like this:
-    * 
-    * ( TableScanOperator )
-    *           |
-    * ( SelectOperator    )
-    *           |
-    * ( CacheSinkOperator )
-    * 
-    * ( RddScanOperator   )
-    * 
-    * 
-    * This is set only after analyze() is called, and only if conf.doBootstrap .
-    */
-  def getPostInputScanOperators(): Map[Operator, Seq[Operator]] = {
-    
-  }
   
   /**
    * This is used in driver to get the result schema.
@@ -209,8 +189,9 @@ class SharkSemanticAnalyzer(conf: HiveConf) extends SemanticAnalyzer(conf) with 
         }
       }
 
-      SharkSemanticAnalyzer.breakHivePlanByStages(Seq(terminalOp))
-      genMapRedTasks(qb, pctx, Seq(terminalOp))
+      val terminalOps = executePostAnalysisHooks(Seq(terminalOp))
+      SharkSemanticAnalyzer.breakHivePlanByStages(terminalOps)
+      genMapRedTasks(qb, pctx, terminalOps)
 
       // A hack for the query plan dashboard to get the query plan. This was
       // done for SIGMOD demo. Turn it off by default.
@@ -224,6 +205,13 @@ class SharkSemanticAnalyzer(conf: HiveConf) extends SemanticAnalyzer(conf) with 
     }
 
     logInfo("Completed plan generation")
+  }
+  
+  // Hook for subclasses to modify the operator graph before it is finalized
+  // (i.e. before it is broken into stages and before genMapRedTasks is called)
+  // in analyzeInternal.  This is a hack, of course.
+  def executePostAnalysisHooks(terminalOps: Seq[TerminalOperator]): Seq[shark.execution.TerminalOperator] = {
+    terminalOps
   }
 
   /**
