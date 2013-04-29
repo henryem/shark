@@ -68,7 +68,11 @@ extends Writable {
   var numRows = 0
   val fields: JList[_ <: StructField] = oi.getAllStructFieldRefs
   val columnBuilders = Array.tabulate[Column.ColumnBuilder](fields.size) { i =>
-    builderFunc(fields.get(i).getFieldObjectInspector, initialColumnSize)
+    val cs = initialColumnSize
+    val field = fields.get(i)
+    val foi = field.getFieldObjectInspector()
+    builderFunc(foi, cs)
+//    builderFunc(fields.get(i).getFieldObjectInspector, initialColumnSize)
   }
   var columns: Array[Column] = _
 

@@ -45,6 +45,8 @@ import shark.execution.RowWrapper
 import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector.Category
 import shark.execution.HiveOperator
+import shark.execution.serialization.KryoSerializer
+import org.apache.hadoop.hive.serde2.objectinspector.PrimitiveObjectInspector
 
 
 /**
@@ -145,7 +147,7 @@ class BootstrapRunner(conf: HiveConf) {
   private def doBootstrap(cmd: String, inputRdd: RDD[Any]): String = {
     val resampleRdds = ResampleGenerator.generateResamples(inputRdd, BootstrapRunner.NUM_BOOTSTRAP_RESAMPLES)
     val resultRdds = resampleRdds.map({ resampleRdd => 
-      //TODO: Reuse semantic analysis across runs.
+      //TODO: Reuse semantic analysis across runs.  It seems that this is actually expensive.
       val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf, Some(resampleRdd))
       val sinkOperators: Seq[shark.execution.Operator[_]] = BootstrapRunner.getSinkOperators(sem)
       BootstrapRunner.initializeOperatorTree(sem)
@@ -154,7 +156,7 @@ class BootstrapRunner(conf: HiveConf) {
       val sinkOperator = sinkOperators(0).asInstanceOf[shark.execution.TerminalOperator]
       (sinkOperator.execute(), sinkOperator.objectInspector)
     })
-    val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf, None)
+    val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf, Some(SharkEnv.sc.parallelize(Seq()))) //HACK: This RDD won't be used, but we need to pass one.
     val bootstrapOutputs = BootstrapRunner.collectBootstrapOutputs(resultRdds, sem)
     BootstrapRunner.computeErrorQuantification(bootstrapOutputs).toString
   }
@@ -212,22 +214,42 @@ object BootstrapRunner {
   }
   
   private def collectBootstrapOutputs(outputRdds: Seq[(RDD[_], ObjectInspector)], sem: BaseSemanticAnalyzer): Seq[Double] = {
+    //TODO: Share ObjectInspectors across RDDs.  Serializing them repeatedly
+    // here is wasteful.
     outputRdds
       .par
       .map({ case (outputRdd, objectInspector) => 
-        //FIXME: Might need to serialize rows first.
-        val rawOutputs = outputRdd.collect()
+        //NOTE: We have to transform the rows to numbers _before_ collecting
+        // them.  Otherwise we will try to collect a bunch of DoubleWritables
+        // and fail because Writables are not Java serializable.
+        val objectInspectorSerialized = KryoSerializer.serialize(objectInspector)
+        val rawOutputs = outputRdd
+          .map(hiveRow => toNumericOutput(hiveRow, KryoSerializer.deserialize(objectInspectorSerialized)))
+          .collect()
         //TODO: Support multi-row outputs (e.g. group-bys)
         require(rawOutputs.size == 1, "Currently only queries with single-row outputs are supported!")
-        toNumericOutput(rawOutputs(0), objectInspector)
+        rawOutputs(0)
       })
       .seq
   }
   
   private def toNumericOutput(rawOutput: Any, objectInspector: ObjectInspector): Double = {
-    //FIXME: Make sure the first field is actually a double.
+    //FIXME: This could be cleaned up quite a bit.  Also, we may want
+    // to allow more types.
     require(objectInspector.getCategory() == Category.STRUCT)
-    new RowWrapper(rawOutput, Map(), objectInspector.asInstanceOf[StructObjectInspector]).getDouble(0)
+    val structOi = objectInspector.asInstanceOf[StructObjectInspector]
+    val struct = structOi.getStructFieldsDataAsList(rawOutput)
+    val firstFieldOi = structOi.getAllStructFieldRefs().apply(0).getFieldObjectInspector()
+    require(firstFieldOi.getCategory() == Category.PRIMITIVE)
+    val primitiveOi = firstFieldOi.asInstanceOf[PrimitiveObjectInspector]
+    val primitiveFieldValue = primitiveOi.getPrimitiveJavaObject(struct(0))
+    primitiveFieldValue match {
+      case d: java.lang.Double => d.asInstanceOf[java.lang.Double]
+      case f: java.lang.Float => f.asInstanceOf[java.lang.Float].toDouble
+      case i: java.lang.Integer => i.asInstanceOf[java.lang.Integer].toDouble
+      case l: java.lang.Long => l.asInstanceOf[java.lang.Long].toDouble
+      case other => throw new IllegalArgumentException("Unexpected aggregate value type for bootstrap: %s".format(other))
+    }
   }
   
   private def computeErrorQuantification(bootstrapOutputs: Seq[Double]): Double = {
@@ -236,6 +258,7 @@ object BootstrapRunner {
   }
   
   private def standardDeviation(numbers: Seq[Double]): Double = {
+    println("Computing stddev of %s".format(numbers)) //
     //TODO: This is inefficient.
     val count = numbers.size
     val sum = numbers.sum
@@ -258,15 +281,18 @@ object ResampleGenerator {
         originalTableWithWeights.partitions.length,
         012 //FIXME: Random seed here.
         )
-     resamples.map(_.map(fromWeightedRow))
+     resamples.map(_.flatMap(fromWeightedRow))
   }
   
   private def toWeightedRow[I](row: I): WeightedItem[I] = {
     WeightedItem(row, 1.0)
   }
   
-  private def fromWeightedRow[I](weightedRow: WeightedItem[I]): I = {
-    weightedRow.item //TODO: Currently weights are ignored!
+  private def fromWeightedRow[I](weightedRow: WeightedItem[I]): Iterator[I] = {
+    //FIXME: Check whether duplicating rows like this works in Hive.
+    //FIXME: This is copied from blbspark's WeightedRepeatingIterable.
+    require(weightedRow.weight == math.round(weightedRow.weight))
+    Iterator.empty.padTo(math.round(weightedRow.weight).asInstanceOf[Int], weightedRow.item)
   }
 }
 

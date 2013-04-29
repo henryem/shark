@@ -48,8 +48,11 @@ class ColumnarSerDe(builderFunc: ColumnBuilderCreateFunc.TYPE) extends SerDe wit
   override def initialize(conf: Configuration, tbl: Properties) {
     serDeParams = LazySimpleSerDe.initSerdeParams(conf, tbl, this.getClass.getName)
     // Create oi & writable.
-    objectInspector = ColumnarStructObjectInspector(serDeParams)
-
+    //HACK
+    if (objectInspector == null) {
+      objectInspector = ColumnarStructObjectInspector(serDeParams)
+    }
+    
     // This null check is needed because Hive's SemanticAnalyzer.genFileSinkPlan() creates
     // an instance of the table's StructObjectInspector by creating an instance SerDe, which
     // it initializes by passing a 'null' argument for 'conf'.

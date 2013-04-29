@@ -1,17 +1,21 @@
 package shark.execution
 
+import java.util.Properties
+
 import scala.collection.Iterator
 import scala.reflect.BeanProperty
+
 import org.apache.hadoop.hive.conf.HiveConf
+import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector
+
 import shark.execution.serialization.OperatorSerializationWrapper
 import shark.memstore.ColumnarSerDe
+import shark.memstore.ColumnBuilderCreateFunc
 import shark.memstore.RDDSerializer
 import shark.memstore.TableStorage
-import spark.RDD
 import spark.storage.StorageLevel
-import org.apache.hadoop.hive.serde2.lazybinary.LazyBinarySerDe
+import spark.RDD
 import spark.SparkException
-import java.util.Properties
 
 /** Caches an RDD in the middle of an operator graph. */
 class IntermediateCacheOperator() extends UnaryOperator[org.apache.hadoop.hive.ql.exec.ForwardOperator] {
@@ -55,9 +59,9 @@ class IntermediateCacheOperator() extends UnaryOperator[org.apache.hadoop.hive.q
     val rdd = inputRdd.mapPartitionsWithIndex { case(split, iter) =>
       op.initializeOnSlave()
 
-      val serdeClass = classOf[shark.memstore.ColumnarSerDe] //FIXME: Figure out what SerDe to use here.
-      op.logInfo("Using serde: " + serdeClass)
-      val serde = serdeClass.newInstance().asInstanceOf[shark.memstore.ColumnarSerDe]
+      //FIXME: Figure out what SerDe to use here.
+      val serde = new ColumnarSerDe(ColumnBuilderCreateFunc.uncompressedArrayFormat)
+      serde.objectInspector = op.objectInspector.asInstanceOf[StructObjectInspector]
       //FIXME: In CacheSinkOperator this uses the output table properties.  Here
       // we don't have access to an output table, so I'm not sure what to do.
       // Hopefully this will just work.
