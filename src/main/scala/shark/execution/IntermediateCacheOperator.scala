@@ -10,6 +10,8 @@ import shark.memstore.TableStorage
 import spark.RDD
 import spark.storage.StorageLevel
 import org.apache.hadoop.hive.serde2.lazybinary.LazyBinarySerDe
+import spark.SparkException
+import java.util.Properties
 
 /** Caches an RDD in the middle of an operator graph. */
 class IntermediateCacheOperator() extends UnaryOperator[org.apache.hadoop.hive.ql.exec.ForwardOperator] {
@@ -32,10 +34,17 @@ class IntermediateCacheOperator() extends UnaryOperator[org.apache.hadoop.hive.q
   }
   
   override def execute(): RDD[_] = {
-    logInfo("execute")
+    logInfo("execute") //TMP
     val inputRdd = if (parentOperators.size == 1) executeParents().head._2 else null
 
-    val inputCollected = inputRdd.collect //TMP
+    //TMP
+//    try {
+//      val inputCollected = inputRdd.collect //TMP
+//    } catch {
+//      case e: SparkException => {
+//        println(e)
+//      }
+//    }
     
     val op = OperatorSerializationWrapper(this)
 
@@ -48,20 +57,24 @@ class IntermediateCacheOperator() extends UnaryOperator[org.apache.hadoop.hive.q
 
       val serdeClass = classOf[shark.memstore.ColumnarSerDe] //FIXME: Figure out what SerDe to use here.
       op.logInfo("Using serde: " + serdeClass)
-      val serde = serdeClass.newInstance().asInstanceOf[ColumnarSerDe]
-      serde.initialize(op.hconf, null) //FIXME: null
+      val serde = serdeClass.newInstance().asInstanceOf[shark.memstore.ColumnarSerDe]
+      //FIXME: In CacheSinkOperator this uses the output table properties.  Here
+      // we don't have access to an output table, so I'm not sure what to do.
+      // Hopefully this will just work.
+      serde.initialize(op.hconf, new Properties())
 
       val rddSerializier = new RDDSerializer(serde)
       val singletonSerializedIterator = rddSerializier.serialize(iter, op.objectInspector)
       if (singletonSerializedIterator.hasNext) {
         val tableStorage = singletonSerializedIterator.next.asInstanceOf[TableStorage]
+        // Immediately deserialize.
         tableStorage.iterator
       } else {
         Iterator()
       }
     }
     rdd.persist(StorageLevel.MEMORY_AND_DISK) //FIXME: Make parametric.
-    val collected = rdd.collect //TMP
+//    val collected = rdd.collect //TMP
     rdd
   }
   

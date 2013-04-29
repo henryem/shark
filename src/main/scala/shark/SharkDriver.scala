@@ -128,7 +128,8 @@ class BootstrapRunner(conf: HiveConf) {
   
   private def makeInputRdd(cmd: String): Option[RDD[Any]] = {
     val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.InputExtraction, conf, None)
-    if (!sem.isInstanceOf[InputExtractionSemanticAnalyzer]) {
+    if (!sem.isInstanceOf[InputExtractionSemanticAnalyzer]
+        || !sem.asInstanceOf[SemanticAnalyzer].getParseContext().getQB().getIsQuery()) {
       //HACK
       None
     } else {
@@ -214,6 +215,7 @@ object BootstrapRunner {
     outputRdds
       .par
       .map({ case (outputRdd, objectInspector) => 
+        //FIXME: Might need to serialize rows first.
         val rawOutputs = outputRdd.collect()
         //TODO: Support multi-row outputs (e.g. group-bys)
         require(rawOutputs.size == 1, "Currently only queries with single-row outputs are supported!")
@@ -312,7 +314,7 @@ class SharkDriver(conf: HiveConf) extends Driver(conf) with LogHelper {
   
   override def run(cmd: String): CommandProcessorResponse = {
     val response = super.run(cmd)
-//    println(runBootstrap(cmd).getOrElse("No bootstrap will be run for this query.")) //FIXME: Don't just print this here.
+    println(runBootstrap(cmd).getOrElse("No bootstrap will be run for this query.")) //FIXME: Don't just print this here.
     response
   }
   
