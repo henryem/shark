@@ -258,7 +258,6 @@ object BootstrapRunner {
   }
   
   private def standardDeviation(numbers: Seq[Double]): Double = {
-    println("Computing stddev of %s".format(numbers)) //
     //TODO: This is inefficient.
     val count = numbers.size
     val sum = numbers.sum
