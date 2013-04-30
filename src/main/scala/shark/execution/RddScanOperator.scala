@@ -20,8 +20,7 @@ import shark.memstore.TableStorage
  * TODO: Use RddScanOperator in a more Shark-idiomatic way.  For now it is simply
  *   instantiated using new.
  */
-class RddScanOperator()
-    extends UnaryOperator[org.apache.hadoop.hive.ql.exec.ForwardOperator] {
+class RddScanOperator extends UnaryOperator[org.apache.hadoop.hive.ql.exec.ForwardOperator] {
   //TODO: Make this a constructor argument.  Unfortunately it seems that
   // Shark wants a no-args constructor.
   @transient var inputRdd: RDD[_] = _
@@ -36,4 +35,12 @@ class RddScanOperator()
 
   override def postprocessRdd(rdd: RDD[_]): RDD[_] =
     throw new UnsupportedOperationException("RddScanOperator.postprocessRdd()")
+}
+
+object RddScanOperator {
+  def makePartnerHiveOperator() = {
+    //TODO: It is not obvious that RddScanOperator produces ColumnarStructs as
+    // output rows.  Refactor so this is more intuitive.
+    new ColumnarObjectInspectingForwardOperator()
+  }
 }

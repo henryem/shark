@@ -13,6 +13,7 @@ import shark.execution.IntermediateCacheOperator
 import spark.storage.StorageLevel
 import scala.collection.JavaConversions
 import shark.execution.TerminalOperator
+import shark.execution.ColumnarObjectInspectingForwardOperator
 
 class InputExtractionSemanticAnalyzer(conf: HiveConf) extends SharkSemanticAnalyzer(conf) {
   //HACK: This should be part of a proper API.
@@ -84,7 +85,7 @@ object BlinkDbSemanticAnalyzers {
   def insertRddScanOperator(child: shark.execution.Operator[_], parent: shark.execution.Operator[_], inputRdd: RDD[_]): shark.execution.Operator[_] = {
     val newOp = new RddScanOperator()
     newOp.inputRdd = inputRdd
-    val newHiveOp = new org.apache.hadoop.hive.ql.exec.ForwardOperator()
+    val newHiveOp = RddScanOperator.makePartnerHiveOperator()
     newHiveOp.initializeCounters()
     newOp.hiveOp = newHiveOp
     insertOperatorBetween(child, newOp, parent)
@@ -96,7 +97,9 @@ object BlinkDbSemanticAnalyzers {
    */
   def insertCacheOperator(child: shark.execution.Operator[_], parent: shark.execution.Operator[_]): shark.execution.Operator[_] = {
     val newOp = new IntermediateCacheOperator()
-    val newHiveOp = new org.apache.hadoop.hive.ql.exec.ForwardOperator()
+    //TODO: Shouldn't need to make this Hive Operator here - move it to a
+    // static factory in IntermediateCacheOperator.
+    val newHiveOp = IntermediateCacheOperator.makePartnerHiveOperator()
     newHiveOp.initializeCounters()
     newOp.hiveOp = newHiveOp
     insertOperatorBetween(child, newOp, parent)

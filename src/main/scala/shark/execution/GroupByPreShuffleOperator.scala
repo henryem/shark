@@ -120,6 +120,7 @@ class GroupByPreShuffleOperator extends UnaryOperator[HiveGroupByOperator] {
 
     while (iter.hasNext && useHashAggr) {
       val row = iter.next().asInstanceOf[AnyRef]
+//      println("GroupByPreShuffleOperator processing row %s, classes %s".format(row.asInstanceOf[Array[_]].deep.toString, row.asInstanceOf[Array[_]].map(_.getClass).deep.toString)) //TMP
       numRowsInput += 1
 
       newKeys.getNewKey(row, rowInspector)

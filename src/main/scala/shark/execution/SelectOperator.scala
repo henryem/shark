@@ -19,10 +19,12 @@ package shark.execution
 
 import scala.collection.JavaConversions._
 import scala.reflect.BeanProperty
-
 import org.apache.hadoop.hive.ql.exec.{ExprNodeEvaluator, ExprNodeEvaluatorFactory}
 import org.apache.hadoop.hive.ql.exec.{SelectOperator => HiveSelectOperator}
 import org.apache.hadoop.hive.ql.plan.SelectDesc
+import java.util.Arrays
+import scala.util.Random
+import shark.memstore.ColumnarStruct
 
 
 /**
@@ -37,6 +39,7 @@ class SelectOperator extends UnaryOperator[HiveSelectOperator] {
 
   override def initializeOnMaster() {
     conf = hiveOp.getConf()
+//    println("SelectOperator %s initializing on master with objectInspector %s, hiveOp %s, parent %s, child %s".format(this, objectInspector, hiveOp, hiveOp.getParentOperators().apply(0), hiveOp.getChildOperators().apply(0))) //TMP
   }
 
   override def initializeOnSlave() {
@@ -44,6 +47,7 @@ class SelectOperator extends UnaryOperator[HiveSelectOperator] {
       evals = conf.getColList().map(ExprNodeEvaluatorFactory.get(_)).toArray
       evals.foreach(_.initialize(objectInspector))
     }
+//    println("SelectOperator %s initializing on slave with objectInspector %s, evals %s".format(this, objectInspector, evals.deep.toString())) //TMP
   }
 
   override def processPartition(split: Int, iter: Iterator[_]) = {
@@ -54,8 +58,26 @@ class SelectOperator extends UnaryOperator[HiveSelectOperator] {
       iter.map { row =>
         var i = 0
         while (i < evals.length) {
-          reusedRow(i) = evals(i).evaluate(row)
+          try {
+            //TMP
+//            if (row.isInstanceOf[ColumnarStruct]) {
+//              println("Found ColumnarStruct")
+//            }
+            reusedRow(i) = evals(i).evaluate(row)
+          } catch {
+            case e: ClassCastException => println("Exception in SelectOperator %s with evals %s".format(this, evals.deep.toString())); throw e
+          } //TMP
           i += 1
+        }
+        if (false) {
+          println("SelectOperator produced row %s, classes %s from original row %s".format(
+              reusedRow.deep.toString,
+              reusedRow.map(_.getClass).deep.toString,
+              if (row.isInstanceOf[ColumnarStruct]) {
+                "ColumnarStruct: " + row.asInstanceOf[ColumnarStruct].getFieldsAsList() //TMP
+              } else {
+                row
+              }))
         }
         reusedRow
       }

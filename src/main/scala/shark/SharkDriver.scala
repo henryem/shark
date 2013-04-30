@@ -144,6 +144,21 @@ class BootstrapRunner(conf: HiveConf) {
     }
   }
   
+  //TMP
+  private def printOperatorTree(sem: BaseSemanticAnalyzer): Unit = {
+    val sourceOperators: Seq[shark.execution.Operator[_]] = BootstrapRunner.getSourceOperators(sem)
+    def visit(operator: shark.execution.Operator[_]) {
+      println(
+          "Operator %s, hiveOp %s, objectInspectors %s, children %s".format(
+              operator,
+              operator.hiveOp.getClass(),
+              Option(operator.hiveOp.asInstanceOf[Operator[_]].getInputObjInspectors()).map(inspectors => inspectors.deep.toString()),
+              Option(operator.childOperators).map(operators => operators.map(_.getClass()))))
+      operator.childOperators.foreach(visit)
+    }
+//    sourceOperators.foreach(visit)
+  }
+  
   private def doBootstrap(cmd: String, inputRdd: RDD[Any]): String = {
     val resampleRdds = ResampleGenerator.generateResamples(inputRdd, BootstrapRunner.NUM_BOOTSTRAP_RESAMPLES)
     val resultRdds = resampleRdds.map({ resampleRdd => 
@@ -151,6 +166,7 @@ class BootstrapRunner(conf: HiveConf) {
       val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf, Some(resampleRdd))
       val sinkOperators: Seq[shark.execution.Operator[_]] = BootstrapRunner.getSinkOperators(sem)
       BootstrapRunner.initializeOperatorTree(sem)
+      printOperatorTree(sem) //TMP
       //TODO: Handle more than 1 sink.
       require(sinkOperators.size == 1, "During bootstrap: Found %d sinks, expected 1.".format(sinkOperators.size))
       val sinkOperator = sinkOperators(0).asInstanceOf[shark.execution.TerminalOperator]
@@ -165,7 +181,7 @@ class BootstrapRunner(conf: HiveConf) {
 }
 
 object BootstrapRunner {
-  val NUM_BOOTSTRAP_RESAMPLES = 50
+  val NUM_BOOTSTRAP_RESAMPLES = 10
   
   private def doSemanticAnalysis(cmd: String, stage: BootstrapStage, conf: HiveConf, inputRdd: Option[RDD[Any]]): BaseSemanticAnalyzer = {
     val command = new VariableSubstitution().substitute(conf, cmd)
@@ -259,6 +275,7 @@ object BootstrapRunner {
   
   private def standardDeviation(numbers: Seq[Double]): Double = {
     //TODO: This is inefficient.
+    println("Computing standard deviation of %s".format(numbers))
     val count = numbers.size
     val sum = numbers.sum
     val sumSq = numbers.map(number => number*number).sum
@@ -291,6 +308,7 @@ object ResampleGenerator {
     //FIXME: Check whether duplicating rows like this works in Hive.
     //FIXME: This is copied from blbspark's WeightedRepeatingIterable.
     require(weightedRow.weight == math.round(weightedRow.weight))
+//    println("Weight: %d".format(math.round(weightedRow.weight).asInstanceOf[Int])) //TMP
     Iterator.empty.padTo(math.round(weightedRow.weight).asInstanceOf[Int], weightedRow.item)
   }
 }
