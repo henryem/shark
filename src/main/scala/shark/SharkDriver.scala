@@ -48,6 +48,7 @@ import shark.execution.HiveOperator
 import shark.execution.serialization.KryoSerializer
 import org.apache.hadoop.hive.serde2.objectinspector.PrimitiveObjectInspector
 import blinkdb.BootstrapRunner
+import blinkdb.StandardDeviationErrorQuantifier
 
 
 /**
@@ -176,7 +177,7 @@ class SharkDriver(conf: HiveConf) extends Driver(conf) with LogHelper {
   
   private def runBootstrap(cmd: String): Option[String] = {
     val bootstrapRunner = new BootstrapRunner(conf)
-    bootstrapRunner.runForResult(cmd)
+    bootstrapRunner.runForResult(cmd, StandardDeviationErrorQuantifier).map(_.toString)
   }
 
   /**

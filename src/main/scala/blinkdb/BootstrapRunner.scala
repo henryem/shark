@@ -27,9 +27,27 @@ import scala.collection.JavaConversions._
 import shark.LogHelper
 
 class BootstrapRunner(conf: HiveConf) extends LogHelper {
-  def runForResult(cmd: String): Option[String] = {
+  /** 
+   * @return one ErrorQuantification for each row and field in the output of
+   *   @cmd.  For example, if there are two cities, NY and SF, and we have the
+   *   following query:
+   *     SELECT AVG(salary), AVG(height), AVG(weight) FROM t GROUP BY city;
+   *   ...then the bootstrap output might look like:
+   *     Seq(Seq(100.0, 2.0, 4.0), Seq(102.0, 2.1, 3.9))
+   *   
+   *   If no bootstrap is run (e.g. because the query is creating a table or
+   *   updating rows, rather than selecting aggregates), None is returned.
+   *   
+   *   TODO: Wrap the return value into a single object.
+   *   TODO: Support columns without error quantifications, e.g. adding city as
+   *     one of the selected columns in the above query.
+   */
+  def runForResult[E <: ErrorQuantification](
+      cmd: String,
+      errorQuantifier: ErrorQuantifier[E]):
+      Option[Seq[Seq[ErrorQuantification]]] = {
     val inputRdd: Option[RDD[Any]] = makeInputRdd(cmd)
-    inputRdd.map(rdd => doBootstrap(cmd, rdd))
+    inputRdd.map(rdd => doBootstrap(cmd, rdd, errorQuantifier))
   }
   
   /** 
@@ -56,6 +74,37 @@ class BootstrapRunner(conf: HiveConf) extends LogHelper {
     }
   }
   
+  private def doBootstrap[E <: ErrorQuantification](
+      cmd: String,
+      inputRdd: RDD[Any],
+      errorQuantifier: ErrorQuantifier[E]):
+      Seq[Seq[E]] = {
+    val resampleRdds = ResampleGenerator.generateResamples(inputRdd, BootstrapRunner.NUM_BOOTSTRAP_RESAMPLES)
+    val resultRdds = resampleRdds.map({ resampleRdd => 
+      //TODO: Reuse semantic analysis across runs.  For now this avoids the
+      // hassle of reaching into the graph and replacing the resample RDD,
+      // and it also avoids any bugs that might result from executing an
+      // operator graph more than once.
+      val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf, Some(resampleRdd))
+      val sinkOperators: Seq[shark.execution.Operator[_]] = BootstrapRunner.getSinkOperators(sem)
+      BootstrapRunner.initializeOperatorTree(sem)
+      BootstrapRunner.logOperatorTree(sem)
+      //TODO: Handle more than 1 sink.
+      require(sinkOperators.size == 1, "During bootstrap: Found %d sinks, expected 1.".format(sinkOperators.size))
+      val sinkOperator = sinkOperators(0).asInstanceOf[shark.execution.TerminalOperator]
+      require(sinkOperator.objectInspector.isInstanceOf[StructObjectInspector], "During bootstrap: Expected output rows to be Structs, but encountered something else.")
+      (sinkOperator.execute(), sinkOperator.objectInspector.asInstanceOf[StructObjectInspector])
+    })
+    val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf, Some(SharkEnv.sc.parallelize(Seq()))) //HACK: This RDD won't be used, but we need to pass one.
+    val bootstrapOutputs = BootstrapRunner.collectBootstrapOutputs(resultRdds)
+    //TODO: Make this pluggable.
+    errorQuantifier.computeError(bootstrapOutputs)
+  }
+}
+
+object BootstrapRunner extends LogHelper {
+  val NUM_BOOTSTRAP_RESAMPLES = 10
+  
   private def logOperatorTree(sem: BaseSemanticAnalyzer): Unit = {
     if (!log.isDebugEnabled()) {
       return
@@ -72,31 +121,6 @@ class BootstrapRunner(conf: HiveConf) extends LogHelper {
     }
     sourceOperators.foreach(visit)
   }
-  
-  private def doBootstrap(cmd: String, inputRdd: RDD[Any]): String = {
-    val resampleRdds = ResampleGenerator.generateResamples(inputRdd, BootstrapRunner.NUM_BOOTSTRAP_RESAMPLES)
-    val resultRdds = resampleRdds.map({ resampleRdd => 
-      //TODO: Reuse semantic analysis across runs.  For now this avoids the
-      // hassle of reaching into the graph and replacing the resample RDD,
-      // and it also avoids any bugs that might result from executing an
-      // operator graph more than once.
-      val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf, Some(resampleRdd))
-      val sinkOperators: Seq[shark.execution.Operator[_]] = BootstrapRunner.getSinkOperators(sem)
-      BootstrapRunner.initializeOperatorTree(sem)
-      logOperatorTree(sem)
-      //TODO: Handle more than 1 sink.
-      require(sinkOperators.size == 1, "During bootstrap: Found %d sinks, expected 1.".format(sinkOperators.size))
-      val sinkOperator = sinkOperators(0).asInstanceOf[shark.execution.TerminalOperator]
-      (sinkOperator.execute(), sinkOperator.objectInspector)
-    })
-    val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf, Some(SharkEnv.sc.parallelize(Seq()))) //HACK: This RDD won't be used, but we need to pass one.
-    val bootstrapOutputs = BootstrapRunner.collectBootstrapOutputs(resultRdds, sem)
-    BootstrapRunner.computeErrorQuantification(bootstrapOutputs).toString
-  }
-}
-
-object BootstrapRunner {
-  val NUM_BOOTSTRAP_RESAMPLES = 10
   
   private def doSemanticAnalysis(cmd: String, stage: BootstrapStage, conf: HiveConf, inputRdd: Option[RDD[Any]]): BaseSemanticAnalyzer = {
     val command = new VariableSubstitution().substitute(conf, cmd)
@@ -143,60 +167,54 @@ object BootstrapRunner {
     terminalOp.initializeMasterOnAll()
   }
   
-  private def collectBootstrapOutputs(outputRdds: Seq[(RDD[_], ObjectInspector)], sem: BaseSemanticAnalyzer): Seq[Double] = {
+  // Collect outputs from bootstrap runs @outputRdds.  All of them are
+  // collected at once so that we can collect them concurrently, which may be
+  // advantageous if individual runs do not use all available cluster
+  // resources.
+  private def collectBootstrapOutputs(outputRdds: Seq[(RDD[_], StructObjectInspector)]): Seq[BootstrapOutput] = {
     //TODO: Share ObjectInspectors across RDDs.  Serializing them repeatedly
     // here is wasteful.
     outputRdds
       .par
-      .map({ case (outputRdd, objectInspector) => 
-        //NOTE: We have to transform the rows to numbers _before_ collecting
-        // them.  Otherwise we will try to collect a bunch of DoubleWritables
-        // and fail because Writables are not Java serializable.
-        val objectInspectorSerialized = KryoSerializer.serialize(objectInspector)
-        val rawOutputs = outputRdd
-          .map(hiveRow => toNumericOutput(hiveRow, KryoSerializer.deserialize(objectInspectorSerialized)))
-          .collect()
-        //TODO: Support multi-row outputs (e.g. group-bys)
-        require(rawOutputs.size == 1, "Currently only queries with single-row outputs are supported!")
-        rawOutputs(0)
-      })
+      .map({ case (outputRdd, objectInspector) => collectSingleBootstrapOutput(outputRdd, objectInspector) })
       .seq
   }
   
-  private def toNumericOutput(rawOutput: Any, objectInspector: ObjectInspector): Double = {
-    //FIXME: This could be cleaned up quite a bit.  Also, we may want
-    // to allow more types.
-    require(objectInspector.getCategory() == Category.STRUCT)
-    val structOi = objectInspector.asInstanceOf[StructObjectInspector]
-    val struct = structOi.getStructFieldsDataAsList(rawOutput)
-    val firstFieldOi = structOi.getAllStructFieldRefs().get(0).getFieldObjectInspector()
-    require(firstFieldOi.getCategory() == Category.PRIMITIVE)
-    val primitiveOi = firstFieldOi.asInstanceOf[PrimitiveObjectInspector]
-    val primitiveFieldValue = primitiveOi.getPrimitiveJavaObject(struct.get(0))
-    primitiveFieldValue match {
+  // Collect outputs from a single bootstrap run @rdd, using @objectInspector
+  // to inspect each row.  Currently, rows are expected to have only numeric
+  // primitive fields.
+  private def collectSingleBootstrapOutput(rdd: RDD[_], objectInspector: StructObjectInspector): BootstrapOutput = {
+    val objectInspectorSerialized = KryoSerializer.serialize(objectInspector)
+    val rawOutputs = rdd
+      .map(hiveRow => toNumericRow(hiveRow, KryoSerializer.deserialize(objectInspectorSerialized)))
+      .collect()
+    val numRows = rawOutputs.size
+    val numFields = if (numRows > 0) rawOutputs(0).size else 0
+    BootstrapOutput(rawOutputs, numRows, numFields)
+  }
+  
+  private def toNumericRow(rawOutput: Any, objectInspector: StructObjectInspector): Seq[Double] = {
+    val struct = objectInspector.getStructFieldsDataAsList(rawOutput)
+    val structFieldRefs = objectInspector.getAllStructFieldRefs()
+    (0 until structFieldRefs.size).map({fieldIdx =>
+      val fieldOi = objectInspector.getAllStructFieldRefs().get(fieldIdx).getFieldObjectInspector()
+      require(fieldOi.getCategory() == Category.PRIMITIVE)
+      val primitiveOi = fieldOi.asInstanceOf[PrimitiveObjectInspector]
+      val primitiveFieldValue = primitiveOi.getPrimitiveJavaObject(struct.get(fieldIdx))
+      primitiveToDouble(primitiveFieldValue)
+    })
+  }
+  
+  private def primitiveToDouble(primitive: Object): Double = {
+    //FIXME: May want to allow more types.  Note that Hive's
+    // PrimitiveObjectInspectorUtils.getDouble() is not suitable, since it
+    // merrily converts Strings and other inappropriate types to doubles.
+    primitive match {
       case d: java.lang.Double => d.asInstanceOf[java.lang.Double]
       case f: java.lang.Float => f.asInstanceOf[java.lang.Float].toDouble
       case i: java.lang.Integer => i.asInstanceOf[java.lang.Integer].toDouble
       case l: java.lang.Long => l.asInstanceOf[java.lang.Long].toDouble
       case other => throw new IllegalArgumentException("Unexpected aggregate value type for bootstrap: %s".format(other))
-    }
-  }
-  
-  private def computeErrorQuantification(bootstrapOutputs: Seq[Double]): Double = {
-    //TODO: Define a BootstrapOutput class instead.
-    standardDeviation(bootstrapOutputs)
-  }
-  
-  private def standardDeviation(numbers: Seq[Double]): Double = {
-    //TODO: This is inefficient.
-    println("Computing standard deviation of %s".format(numbers))
-    val count = numbers.size
-    val sum = numbers.sum
-    val sumSq = numbers.map(number => number*number).sum
-    if (count == 0) {
-      0.0
-    } else {
-      math.sqrt((sumSq - sum*sum/count) / count)
     }
   }
 }
@@ -224,3 +242,4 @@ object ResampleGenerator {
     Iterator.empty.padTo(math.round(weightedRow.weight).asInstanceOf[Int], weightedRow.item)
   }
 }
+
