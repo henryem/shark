@@ -23,10 +23,10 @@ import shark.SharkEnv
 import org.apache.hadoop.hive.ql.parse.ParseDriver
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector.Category
 import scala.collection.JavaConversions
-
 import scala.collection.JavaConversions._
+import shark.LogHelper
 
-class BootstrapRunner(conf: HiveConf) {
+class BootstrapRunner(conf: HiveConf) extends LogHelper {
   def runForResult(cmd: String): Option[String] = {
     val inputRdd: Option[RDD[Any]] = makeInputRdd(cmd)
     inputRdd.map(rdd => doBootstrap(cmd, rdd))
@@ -52,15 +52,17 @@ class BootstrapRunner(conf: HiveConf) {
     
       //TODO: Handle more than 1 sink.
       require(intermediateInputOperators.size == 1)
-      Some(intermediateInputOperators(0).execute().asInstanceOf[RDD[Any]]) //FIXME: Not sure if this cast is legitimate.
+      Some(intermediateInputOperators(0).execute().asInstanceOf[RDD[Any]])
     }
   }
   
-  //TMP
-  private def printOperatorTree(sem: BaseSemanticAnalyzer): Unit = {
+  private def logOperatorTree(sem: BaseSemanticAnalyzer): Unit = {
+    if (!log.isDebugEnabled()) {
+      return
+    }
     val sourceOperators: Seq[shark.execution.Operator[_]] = BootstrapRunner.getSourceOperators(sem)
     def visit(operator: shark.execution.Operator[_]) {
-      println(
+      log.debug(
           "Operator %s, hiveOp %s, objectInspectors %s, children %s".format(
               operator,
               operator.hiveOp.getClass(),
@@ -68,17 +70,20 @@ class BootstrapRunner(conf: HiveConf) {
               Option(operator.childOperators).map(operators => operators.map(_.getClass()))))
       operator.childOperators.foreach(visit)
     }
-//    sourceOperators.foreach(visit)
+    sourceOperators.foreach(visit)
   }
   
   private def doBootstrap(cmd: String, inputRdd: RDD[Any]): String = {
     val resampleRdds = ResampleGenerator.generateResamples(inputRdd, BootstrapRunner.NUM_BOOTSTRAP_RESAMPLES)
     val resultRdds = resampleRdds.map({ resampleRdd => 
-      //TODO: Reuse semantic analysis across runs.  It seems that this is actually expensive.
+      //TODO: Reuse semantic analysis across runs.  For now this avoids the
+      // hassle of reaching into the graph and replacing the resample RDD,
+      // and it also avoids any bugs that might result from executing an
+      // operator graph more than once.
       val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf, Some(resampleRdd))
       val sinkOperators: Seq[shark.execution.Operator[_]] = BootstrapRunner.getSinkOperators(sem)
       BootstrapRunner.initializeOperatorTree(sem)
-      printOperatorTree(sem) //TMP
+      logOperatorTree(sem)
       //TODO: Handle more than 1 sink.
       require(sinkOperators.size == 1, "During bootstrap: Found %d sinks, expected 1.".format(sinkOperators.size))
       val sinkOperator = sinkOperators(0).asInstanceOf[shark.execution.TerminalOperator]
@@ -214,10 +219,8 @@ object ResampleGenerator {
   }
   
   private def fromWeightedRow[I](weightedRow: WeightedItem[I]): Iterator[I] = {
-    //FIXME: Check whether duplicating rows like this works in Hive.
     //FIXME: This is copied from blbspark's WeightedRepeatingIterable.
     require(weightedRow.weight == math.round(weightedRow.weight))
-//    println("Weight: %d".format(math.round(weightedRow.weight).asInstanceOf[Int])) //TMP
     Iterator.empty.padTo(math.round(weightedRow.weight).asInstanceOf[Int], weightedRow.item)
   }
 }

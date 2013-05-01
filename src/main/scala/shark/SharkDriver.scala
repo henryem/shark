@@ -169,7 +169,8 @@ class SharkDriver(conf: HiveConf) extends Driver(conf) with LogHelper {
   
   override def run(cmd: String): CommandProcessorResponse = {
     val response = super.run(cmd)
-    println(runBootstrap(cmd).getOrElse("No bootstrap will be run for this query.")) //FIXME: Don't just print this here.
+    val bootstrapOutput = runBootstrap(cmd)
+    println(bootstrapOutput.getOrElse("No bootstrap will be run for this query.")) //FIXME: Don't just print this here.
     response
   }
   
