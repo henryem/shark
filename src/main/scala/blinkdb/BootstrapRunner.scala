@@ -22,6 +22,9 @@ import org.apache.hadoop.hive.ql.parse.SemanticAnalyzer
 import shark.SharkEnv
 import org.apache.hadoop.hive.ql.parse.ParseDriver
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector.Category
+import scala.collection.JavaConversions
+
+import scala.collection.JavaConversions._
 
 class BootstrapRunner(conf: HiveConf) {
   def runForResult(cmd: String): Option[String] = {
@@ -29,11 +32,19 @@ class BootstrapRunner(conf: HiveConf) {
     inputRdd.map(rdd => doBootstrap(cmd, rdd))
   }
   
+  /** 
+   * Make an RDD containing the input to @cmd, suitable for insertion in @cmd
+   * via an RddScanOperator.
+   * 
+   * @return None if @cmd is not suitable for extracting input.
+   */
   private def makeInputRdd(cmd: String): Option[RDD[Any]] = {
     val sem = BootstrapRunner.doSemanticAnalysis(cmd, BootstrapStage.InputExtraction, conf, None)
     if (!sem.isInstanceOf[InputExtractionSemanticAnalyzer]
         || !sem.asInstanceOf[SemanticAnalyzer].getParseContext().getQB().getIsQuery()) {
-      //HACK
+      //TODO: With Sameer's SQL parser, this will be unnecessary - we can just
+      // check whether the user explicitly asked for an approximation.  For now
+      // we execute the bootstrap on anything that looks like a query.
       None
     } else {
       val intermediateInputOperators: Seq[shark.execution.Operator[_]] = BootstrapRunner.getIntermediateInputOperators(sem)
@@ -77,8 +88,6 @@ class BootstrapRunner(conf: HiveConf) {
     val bootstrapOutputs = BootstrapRunner.collectBootstrapOutputs(resultRdds, sem)
     BootstrapRunner.computeErrorQuantification(bootstrapOutputs).toString
   }
-  
-  
 }
 
 object BootstrapRunner {
@@ -100,8 +109,7 @@ object BootstrapRunner {
   }
   
   private def getSourceOperators(sem: BaseSemanticAnalyzer): Seq[shark.execution.Operator[_]] = {
-    sem
-      .getRootTasks()
+    sem.getRootTasks()
       .map(_.getWork().asInstanceOf[SparkWork].terminalOperator.asInstanceOf[shark.execution.TerminalOperator])
       .flatMap(_.returnTopOperators())
       .distinct
@@ -119,7 +127,7 @@ object BootstrapRunner {
   // Initialize all operators in the operator tree contained in @sem.  After
   // this, it is okay to call execute() on any operator in this tree.
   private def initializeOperatorTree(sem: BaseSemanticAnalyzer): Unit = {
-    val executionTask = sem.getRootTasks().apply(0)
+    val executionTask = sem.getRootTasks().get(0)
     require(executionTask.isInstanceOf[SparkTask])
     val work = executionTask.getWork()
     require(work.isInstanceOf[SparkWork])
@@ -156,10 +164,10 @@ object BootstrapRunner {
     require(objectInspector.getCategory() == Category.STRUCT)
     val structOi = objectInspector.asInstanceOf[StructObjectInspector]
     val struct = structOi.getStructFieldsDataAsList(rawOutput)
-    val firstFieldOi = structOi.getAllStructFieldRefs().apply(0).getFieldObjectInspector()
+    val firstFieldOi = structOi.getAllStructFieldRefs().get(0).getFieldObjectInspector()
     require(firstFieldOi.getCategory() == Category.PRIMITIVE)
     val primitiveOi = firstFieldOi.asInstanceOf[PrimitiveObjectInspector]
-    val primitiveFieldValue = primitiveOi.getPrimitiveJavaObject(struct(0))
+    val primitiveFieldValue = primitiveOi.getPrimitiveJavaObject(struct.get(0))
     primitiveFieldValue match {
       case d: java.lang.Double => d.asInstanceOf[java.lang.Double]
       case f: java.lang.Float => f.asInstanceOf[java.lang.Float].toDouble

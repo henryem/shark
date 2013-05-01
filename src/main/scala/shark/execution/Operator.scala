@@ -203,7 +203,6 @@ abstract class UnaryOperator[T <: HiveOperator] extends Operator[T] {
   def parentOperator = parentOperators.head
 
   override def execute(): RDD[_] = {
-    logInfo("execute()") //TMP
     val inputRdd = if (parentOperators.size == 1) executeParents().head._2 else null
     val rddPreprocessed = preprocessRdd(inputRdd)
     val rddProcessed = Operator.executeProcessPartition(this, rddPreprocessed)

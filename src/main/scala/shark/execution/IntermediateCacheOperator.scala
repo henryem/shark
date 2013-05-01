@@ -16,8 +16,16 @@ import spark.SparkException
 import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
+import blinkdb.ColumnarObjectInspectingForwardOperator
 
-/** Caches an RDD in the middle of an operator graph. */
+/** 
+ * Caches an RDD in the middle of an operator graph.  Currently this is
+ * intended for use only as a parent of an RddScanOperator, though in principle
+ * it could be used to cache any intermediate RDD.
+ * 
+ * NOTE: This operator must be paired with a Hive Operator produced by
+ * IntermediateCacheOperator.makePartnerHiveOperator().
+ */
 class IntermediateCacheOperator() extends UnaryOperator[org.apache.hadoop.hive.ql.exec.ForwardOperator] {
   
   override def execute(): RDD[_] = {
@@ -26,36 +34,24 @@ class IntermediateCacheOperator() extends UnaryOperator[org.apache.hadoop.hive.q
     
     val op = OperatorSerializationWrapper(this)
 
-    // Serialize the RDD on all partitions, then immediately deserialize it.
+    // Serialize the RDD on all partitions, then cache it and immediately
+    // deserialize it.
     // This is necessary because Hive reuses objects when iterating over rows,
     // so simply caching the RDD results in a bunch of pointers to the same row
-    // object.
+    // object.  Deserializing before caching also does not work; the reason is
+    // probably similar, though I am not quite sure why.
     val rdd = inputRdd.mapPartitionsWithIndex { case(split, iter) =>
       op.initializeOnSlave()
 
-      //FIXME: Figure out what SerDe to use here.
       val serde = new ColumnarSerDe(ColumnBuilderCreateFunc.uncompressedArrayFormat)
       serde.objectInspector = ColumnarObjectInspectingForwardOperator.makeColumnarObjectInspector(
           op.objectInspector.asInstanceOf[StructObjectInspector])
-      //FIXME: In CacheSinkOperator this uses the output table properties.  Here
-      // we don't have access to an output table, so I'm not sure what to do.
-      // Hopefully this will just work.
       serde.initialize(op.hconf, new Properties())
 
       val rddSerializier = new RDDSerializer(serde)
       val singletonSerializedIterator = rddSerializier.serialize(iter, op.objectInspector)
       singletonSerializedIterator
-      //TMP
-//      if (singletonSerializedIterator.hasNext) {
-//        val tableStorage = singletonSerializedIterator.next.asInstanceOf[TableStorage]
-//        // Immediately deserialize.
-//        tableStorage.iterator
-//      } else {
-//        Iterator()
-//      }
     }
-//    rdd.foreach(_ => Unit) //TMP
-    //TMP
     rdd.persist(StorageLevel.MEMORY_AND_DISK) //FIXME: Make parametric.
     val deserializedRdd = rdd.mapPartitions( iter => {
       if (iter.hasNext) {
@@ -82,23 +78,5 @@ class IntermediateCacheOperator() extends UnaryOperator[org.apache.hadoop.hive.q
 object IntermediateCacheOperator {
   def makePartnerHiveOperator() = {
     new ColumnarObjectInspectingForwardOperator()
-  }
-}
-
-/** A partner Hive Operator for any Operator that produces ColumnarStructs as outputs. */
-//TODO: Move to its own file.
-class ColumnarObjectInspectingForwardOperator extends org.apache.hadoop.hive.ql.exec.ForwardOperator {
-  override def initializeOp(hconf: Configuration): Unit = {
-    outputObjInspector = outputObjInspector match {
-      case structOi: StructObjectInspector => ColumnarObjectInspectingForwardOperator.makeColumnarObjectInspector(structOi)
-      case other => other
-    }
-    super.initializeOp(hconf)
-  }
-}
-
-object ColumnarObjectInspectingForwardOperator {
-  def makeColumnarObjectInspector(objectInspector: StructObjectInspector): ColumnarStructObjectInspector = {
-    ColumnarStructObjectInspector.fromStructObjectInspector(objectInspector)
   }
 }

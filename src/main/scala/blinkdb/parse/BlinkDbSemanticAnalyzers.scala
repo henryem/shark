@@ -1,19 +1,15 @@
 package shark.parse
 
-import org.slf4j.Logger
-import org.apache.hadoop.hive.conf.HiveConf
-import spark.RDD
-import shark.execution.HiveOperator
-import org.apache.hadoop.hive.ql.parse.ASTNode
-import shark.execution.CacheSinkOperator
-import shark.execution.RddScanOperator
-import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
-import org.apache.hadoop.hive.ql.exec.OperatorFactory
-import shark.execution.IntermediateCacheOperator
-import spark.storage.StorageLevel
 import scala.collection.JavaConversions
+
+import org.apache.hadoop.hive.conf.HiveConf
+
+import shark.execution.CacheSinkOperator
+import shark.execution.HiveOperator
+import shark.execution.IntermediateCacheOperator
+import shark.execution.RddScanOperator
 import shark.execution.TerminalOperator
-import shark.execution.ColumnarObjectInspectingForwardOperator
+import spark.RDD
 
 class InputExtractionSemanticAnalyzer(conf: HiveConf) extends SharkSemanticAnalyzer(conf) {
   //HACK: This should be part of a proper API.

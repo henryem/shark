@@ -2,19 +2,23 @@ package shark.execution
 import spark.RDD
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
 import shark.memstore.TableStorage
+import blinkdb.ColumnarObjectInspectingForwardOperator
 
 /**
  * Wraps an existing RDD and passes it through to children operators.  Note
  * that an RDD produced by a CacheSinkOperator cannot be used directly here,
  * since each partition is stored in a serialized object.  See
  * TableScanOperator for an example of deserializing a cached RDD produced by
- * CacheSinkOperator.
+ * CacheSinkOperator.  IntermediateCacheOperator does not have this problem.
  * 
- * Note: This really should be a TopOperator, but for now I am using it
- * in a slightly hacky way in the middle of an operator graph, and it is more
- * convenience to implement it as a unary operator.  The parents of this
- * operator are just ignored, except that they are used to populate its
- * ObjectInspector.
+ * NOTE: The parents of this operator are just ignored, except that they are
+ * used to populate its ObjectInspector.  For now it is not suitable for use
+ * as a top operator, since some code unfortunately relies on such operators
+ * actually inheriting from TopOperator, and the same code would cause problems
+ * when this operator is used in the middle of a graph.
+ * 
+ * NOTE: This operator must be paired with a Hive Operator produced by
+ * RddScanOperator.makePartnerHiveOperator().
  * 
  * TODO: Add documentation.  For now this is to be used only in BlinkDB.
  * TODO: Use RddScanOperator in a more Shark-idiomatic way.  For now it is simply
