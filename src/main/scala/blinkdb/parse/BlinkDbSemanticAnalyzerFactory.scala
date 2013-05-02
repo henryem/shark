@@ -1,4 +1,4 @@
-package shark.parse
+package blinkdb.parse
 import org.apache.hadoop.hive.ql.parse.ExplainSemanticAnalyzer
 import org.apache.hadoop.hive.ql.parse.BaseSemanticAnalyzer
 import org.apache.hadoop.hive.ql.parse.SemanticAnalyzer
@@ -6,8 +6,10 @@ import org.apache.hadoop.hive.ql.parse.SemanticAnalyzerFactory
 import org.apache.hadoop.hive.ql.parse.ASTNode
 import org.apache.hadoop.hive.conf.HiveConf
 import shark.SharkConfVars
-import shark.BootstrapStage
 import spark.RDD
+import shark.parse.SharkSemanticAnalyzerFactory
+import shark.parse.SharkSemanticAnalyzer
+import blinkdb.BootstrapStage
 
 object BlinkDbSemanticAnalyzerFactory {
 

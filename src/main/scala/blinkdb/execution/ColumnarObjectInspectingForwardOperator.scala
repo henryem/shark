@@ -1,4 +1,4 @@
-package blinkdb
+package blinkdb.execution
 
 import org.apache.hadoop.hive.ql.exec.ForwardOperator
 import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector

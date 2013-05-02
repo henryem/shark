@@ -35,11 +35,9 @@ import shark.execution.{SharkExplainTask, SharkExplainWork, SparkTask, SparkWork
 import shark.memstore.ColumnarSerDe
 import shark.parse.{QueryContext, SharkSemanticAnalyzerFactory}
 import spark.RDD
-import shark.parse.BlinkDbSemanticAnalyzerFactory
 import edu.berkeley.blbspark.WeightedItem
 import edu.berkeley.blbspark.StratifiedBlb
 import org.apache.hadoop.hive.ql.processors.CommandProcessorResponse
-import shark.parse.InputExtractionSemanticAnalyzer
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
 import shark.execution.RowWrapper
 import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector
@@ -49,6 +47,7 @@ import shark.execution.serialization.KryoSerializer
 import org.apache.hadoop.hive.serde2.objectinspector.PrimitiveObjectInspector
 import blinkdb.BootstrapRunner
 import blinkdb.StandardDeviationErrorQuantifier
+import blinkdb.ErrorAnalysisRunner
 
 
 /**
@@ -170,14 +169,13 @@ class SharkDriver(conf: HiveConf) extends Driver(conf) with LogHelper {
   
   override def run(cmd: String): CommandProcessorResponse = {
     val response = super.run(cmd)
-    val bootstrapOutput = runBootstrap(cmd)
-    println(bootstrapOutput.getOrElse("No bootstrap will be run for this query.")) //FIXME: Don't just print this here.
+    val errorAnalysis = runErrorAnalysis(cmd).map(analysisMessage => "Error analysis: %s".format(analysisMessage))
+    println(errorAnalysis.getOrElse("No error analysis will be run for this query.")) //FIXME: Don't just print this here.
     response
   }
   
-  private def runBootstrap(cmd: String): Option[String] = {
-    val bootstrapRunner = new BootstrapRunner(conf)
-    bootstrapRunner.runForResult(cmd, StandardDeviationErrorQuantifier).map(_.toString)
+  private def runErrorAnalysis(cmd: String): Option[String] = {
+    ErrorAnalysisRunner.runForResult(cmd, StandardDeviationErrorQuantifier, conf).map(_.toString)
   }
 
   /**

@@ -1,19 +1,18 @@
-package shark.parse
+package blinkdb.parse
 
 import scala.collection.JavaConversions
-
 import org.apache.hadoop.hive.conf.HiveConf
-
 import shark.execution.CacheSinkOperator
 import shark.execution.HiveOperator
 import shark.execution.IntermediateCacheOperator
 import shark.execution.RddScanOperator
 import shark.execution.TerminalOperator
 import spark.RDD
+import shark.parse.SharkSemanticAnalyzer
 
 class InputExtractionSemanticAnalyzer(conf: HiveConf) extends SharkSemanticAnalyzer(conf) {
   //HACK: This should be part of a proper API.
-  var intermediateInputOperator: shark.execution.Operator[_] = _
+  var intermediateInputOperator: shark.execution.IntermediateCacheOperator = _
   
   override def executePostAnalysisHooks(terminalOps: Seq[TerminalOperator]): Seq[TerminalOperator] = {
     val topOperators = terminalOps.flatMap(_.returnTopOperators()).distinct
@@ -28,8 +27,8 @@ class InputExtractionSemanticAnalyzer(conf: HiveConf) extends SharkSemanticAnaly
     require(postInputScanOperatorAndChildren._2.size == 1)
     val parent = postInputScanOperatorAndChildren._1
     val child = postInputScanOperatorAndChildren._2.apply(0)
-    val cacheSinkOp = BlinkDbSemanticAnalyzers.insertCacheOperator(child, parent)
-    this.intermediateInputOperator = cacheSinkOp
+    val intermediateCacheOp = BlinkDbSemanticAnalyzers.insertCacheOperator(child, parent)
+    this.intermediateInputOperator = intermediateCacheOp
     terminalOps
   }
 }
@@ -78,7 +77,7 @@ object BlinkDbSemanticAnalyzers {
   /** 
    * Make an RddScanOperator and insert it between @parent and @child.
    */
-  def insertRddScanOperator(child: shark.execution.Operator[_], parent: shark.execution.Operator[_], inputRdd: RDD[_]): shark.execution.Operator[_] = {
+  def insertRddScanOperator(child: shark.execution.Operator[_], parent: shark.execution.Operator[_], inputRdd: RDD[_]): RddScanOperator = {
     val newOp = new RddScanOperator()
     newOp.inputRdd = inputRdd
     val newHiveOp = RddScanOperator.makePartnerHiveOperator()
@@ -91,7 +90,7 @@ object BlinkDbSemanticAnalyzers {
   /**
    * Make an IntermediateCacheOperator and insert it between @parent and @child.
    */
-  def insertCacheOperator(child: shark.execution.Operator[_], parent: shark.execution.Operator[_]): shark.execution.Operator[_] = {
+  def insertCacheOperator(child: shark.execution.Operator[_], parent: shark.execution.Operator[_]): IntermediateCacheOperator = {
     val newOp = new IntermediateCacheOperator()
     //TODO: Shouldn't need to make this Hive Operator here - move it to a
     // static factory in IntermediateCacheOperator.

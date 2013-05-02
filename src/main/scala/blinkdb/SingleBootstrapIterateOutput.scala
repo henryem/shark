@@ -1,22 +1,43 @@
 package blinkdb
 import shark.LogHelper
 
-/** The output of a single run of a bootstrap. */
-case class BootstrapOutput(rows: Seq[Seq[Double]], numRows: Int, numFields: Int) {
+/** The output of a single run of a query. */
+case class SingleQueryIterateOutput(rows: Seq[Seq[Double]], numRows: Int, numFields: Int) {
   require(rows.size == numRows)
   require(rows.size == 0 || rows(0).size == numFields)
 }
 
 /**
- * A quantification of error, typically estimated by one or more bootstrap
- * runs or by computing a closed-form estimate.
+ * A container for the results of error analysis on an approximate query.
+ * Includes:
+ *   * Quantifications of estimation error for each output column or row.
+ *   * The output of a diagnostic for the error estimation process itself.
  */
-trait ErrorQuantification
+case class ErrorAnalysis[E <: ErrorQuantification](
+    errorQuantifications: Seq[Seq[E]],
+    diagnosticOutput: DiagnosticOutput)
 
-case class StandardDeviationError(stdDev: Double) extends ErrorQuantification
+/** The output of a diagnostic for an error estimation process. */
+case class DiagnosticOutput(isPassed: Boolean)
+
+/**
+ * A quantification of error for a single estimate, typically estimated by one
+ * or more bootstrap runs or by computing a closed-form estimate.
+ */
+trait ErrorQuantification {
+  def toDouble: Double
+}
+
+case class StandardDeviationError(stdDev: Double) extends ErrorQuantification {
+  override def toDouble = stdDev
+}
+
+object ErrorQuantifications {
+  implicit def toDouble(e: ErrorQuantification) = e.toDouble
+}
 
 trait ErrorQuantifier[Q <: ErrorQuantification] {
-  def computeError(bootstrapOutputs: Seq[BootstrapOutput]): Seq[Seq[Q]] = {
+  def computeError(bootstrapOutputs: Seq[SingleQueryIterateOutput]): Seq[Seq[Q]] = {
     //TODO: If there are no bootstrap outputs, we don't know how many fields
     // there would have been.  Currently we just return no error
     // quantifications.
@@ -45,7 +66,7 @@ case object StandardDeviationErrorQuantifier extends ErrorQuantifier[StandardDev
     StandardDeviationError(standardDeviation(singleFieldValues))
   }
   
-  private def standardDeviation(numbers: Seq[Double]): Double = {
+  def standardDeviation(numbers: Seq[Double]): Double = {
     logDebug("Computing standard deviation of %s".format(numbers))
     //TODO: This is inefficient.
     val count = numbers.size

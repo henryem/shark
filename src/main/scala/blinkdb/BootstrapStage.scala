@@ -1,4 +1,4 @@
-package shark
+package blinkdb
 
 sealed trait BootstrapStage
 object BootstrapStage {

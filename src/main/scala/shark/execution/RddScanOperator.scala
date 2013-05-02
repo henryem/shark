@@ -2,7 +2,7 @@ package shark.execution
 import spark.RDD
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
 import shark.memstore.TableStorage
-import blinkdb.ColumnarObjectInspectingForwardOperator
+import blinkdb.execution.ColumnarObjectInspectingForwardOperator
 
 /**
  * Wraps an existing RDD and passes it through to children operators.  Note
