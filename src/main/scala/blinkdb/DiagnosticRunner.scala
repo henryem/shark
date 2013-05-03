@@ -8,85 +8,113 @@ import shark.LogHelper
 import blinkdb.util.ResampleGenerator
 import shark.execution.RddCacheHelper
 import java.util.Random
+import akka.dispatch.ExecutionContext
+import akka.dispatch.Future
+import edu.berkeley.blbspark.util.Statistics
 
 object DiagnosticRunner extends LogHelper {
-  private val NUM_DIAGNOSTIC_SUBSAMPLES = 5 //TODO: 100?
+  private val NUM_DIAGNOSTIC_SUBSAMPLES = 10 //TODO: 100?
   
   //FIXME: Make this parametric.
-  private val DIAGNOSTIC_SUBSAMPLE_SIZES = Seq(100, 500)
+  private val DIAGNOSTIC_SUBSAMPLE_SIZES = Seq(100, 500, 1000)
 
   // An acceptable level of deviation between the average bootstrap output
   // and ground truth, normalized by ground truth.  This is c_1 in the
   // diagnostics paper.
-  private val ACCEPTABLE_RELATIVE_MEAN_DEVIATION = .5 //FIXME
+  private val ACCEPTABLE_RELATIVE_MEAN_DEVIATION = .2 //FIXME
   
   // An acceptable level of standard deviation among bootstrap outputs,
   // normalized by ground truth.  This is c_2 in the diagnostics paper.
-  private val ACCEPTABLE_RELATIVE_STANDARD_DEVIATION = .5 //FIXME
+  private val ACCEPTABLE_RELATIVE_STANDARD_DEVIATION = .2 //FIXME
   
+  // An acceptable proportion of bootstrap outputs that are within
+  // ACCEPTABLE_DEVIATION of ground truth.  This is \alpha in the diagnostics
+  // paper.
+  private val ACCEPTABLE_PROPORTION_NEAR_GROUND_TRUTH = .95
+  // See ACCEPTABLE_PROPORTION_NEAR_GROUND_TRUTH above.  This is c_3 in the
+  // diagnostics paper.
+  private val ACCEPTABLE_DEVIATION = .2
+  
+  /**
+   * @param inputRdd must be cached.
+   */
   def doDiagnostic[E <: ErrorQuantification](
       cmd: String,
       inputRdd: RDD[Any],
-      inputRddCacher: RddCacheHelper,
       errorQuantifier: ErrorQuantifier[E],
       conf: HiveConf,
-      seed: Int):
-      DiagnosticOutput = {
+      seed: Int)
+      (implicit ec: ExecutionContext):
+      Future[DiagnosticOutput] = {
     //TODO: Implement diagnostic step 3.
     val random = new Random(seed)
-    val resultsPerSubsampleSize = DIAGNOSTIC_SUBSAMPLE_SIZES.map({ subsampleSize =>
-      println("Running diagnostic for subsample size %d.".format(subsampleSize)) //TMP
-      //TMP
-      val subsampleRdds = ResampleGenerator.generateSubsamples(inputRdd, inputRddCacher, NUM_DIAGNOSTIC_SUBSAMPLES, subsampleSize, random.nextInt)
-      val resultRddsAndBootstrapOutputs = subsampleRdds.map({ subsampleRdd => 
-        println("Running a diagnostic iteration.") //TMP
+    //TODO: Put this in a future.  This will require putting the subsample
+    // RDDs into futures as well.
+    val inputRddSize = inputRdd.count
+    //TODO: This is a little hard to read.
+    val resultsPerSubsampleSizeFuture: Future[Seq[SingleDiagnosticResult]] = Future.sequence(DIAGNOSTIC_SUBSAMPLE_SIZES.map({ subsampleSize =>
+      val subsampleRdds = ResampleGenerator.generateSubsamples(inputRdd, NUM_DIAGNOSTIC_SUBSAMPLES, subsampleSize, inputRddSize, random.nextInt)
+      val resultRddsAndBootstrapOutputs = subsampleRdds.map({ subsampleRdd =>
         //TODO: Reuse semantic analysis across runs.  For now this avoids the
         // hassle of reaching into the graph and replacing the resample RDD,
         // and it also avoids any bugs that might result from executing an
         // operator graph more than once.
         val sem = QueryRunner.doSemanticAnalysis(cmd, BootstrapStage.DiagnosticExecution, conf, Some(subsampleRdd))
         //TODO: Restrict Shark to use only a single partition for this subsample.
-        val trueQueryOutput = QueryRunner.executeOperatorTree(sem)
-        //TODO: Just get the bootstrap RDDs and execute them all in a batch
-        // later.  Executing them sequentially will probably kill performance.
-        val bootstrapOutput = BootstrapRunner.doBootstrap(cmd, subsampleRdd, errorQuantifier, conf, random.nextInt)
-        println("Bootstrap output for diagnostic iteration: %s".format(bootstrapOutput)) 
-        (trueQueryOutput, bootstrapOutput)
+        val (trueQueryOutputRdd, objectInspector) = QueryRunner.executeOperatorTree(sem)
+        val trueQueryOutputFuture = QueryRunner.collectSingleQueryOutput(trueQueryOutputRdd, objectInspector)
+        val bootstrapOutputFuture = BootstrapRunner.doBootstrap(cmd, subsampleRdd, errorQuantifier, conf, random.nextInt)
+        (trueQueryOutputFuture, bootstrapOutputFuture)
       })
-      //TODO: Rename the function to something more generic and use it to
-      // collect everything at the same time.
-      val subsamplingOutputs = QueryRunner.collectQueryOutputs(resultRddsAndBootstrapOutputs.map(_._1))
-      println("Diagnostic ground truth outputs: %s".format(subsamplingOutputs)) //TMP
-      val groundTruth = errorQuantifier.computeError(subsamplingOutputs)
-      println("Ground truth: %s".format(groundTruth)) //TMP
-      val subsamplingBootstrapOutputs = resultRddsAndBootstrapOutputs.map(_._2)
+      val subsamplingOutputsFuture = Future.sequence(resultRddsAndBootstrapOutputs.map(_._1))
+      val groundTruthFuture = subsamplingOutputsFuture.map(subsamplingOutputs => errorQuantifier.computeError(subsamplingOutputs))
+      val subsamplingBootstrapOutputsFuture = Future.sequence(resultRddsAndBootstrapOutputs.map(_._2))
+      groundTruthFuture
+        .zip(subsamplingBootstrapOutputsFuture)
+        .map({case (groundTruth, subsamplingBootstrapOutputs) => 
+          val relDev: Seq[Seq[Double]] = computeRelativeDeviation(groundTruth, subsamplingBootstrapOutputs)
+          val relStdDev: Seq[Seq[Double]] = computeNormalizedStandardDeviation(groundTruth, subsamplingBootstrapOutputs)
+          val proportionNearGroundTruth: Seq[Seq[Double]] = computeProportionNearGroundTruth(groundTruth, subsamplingBootstrapOutputs)
+          SingleDiagnosticResult(subsampleSize, relDev, relStdDev, proportionNearGroundTruth)
+        })
+    }))
+    resultsPerSubsampleSizeFuture.map(resultsPerSubsampleSize => {
+      println("Diagnostic results per subsample size: %s".format(resultsPerSubsampleSize)) //TMP
+      val areRelDevsAcceptable = areRelativeDeviationsAcceptable(resultsPerSubsampleSize)
+      val areRelStdDevsAcceptable = areRelativeStandardDeviationsAcceptable(resultsPerSubsampleSize)
+      val arePropsNearGroundTruthAcceptable = areProportionsNearGroundTruthAcceptable(resultsPerSubsampleSize)
+      println("areRelDevsAcceptable: %b, areRelStdDevsAcceptable: %b, areProportionsNearGroundTruthAcceptable: %b".format(areRelDevsAcceptable, areRelStdDevsAcceptable, arePropsNearGroundTruthAcceptable)) //TMP
       
-      val relDev: Seq[Seq[Double]] = computeRelativeDeviation(groundTruth, subsamplingBootstrapOutputs)
-      val relStdDev: Seq[Seq[Double]] = computeNormalizedStandardDeviation(groundTruth, subsamplingBootstrapOutputs)
-      SingleDiagnosticResult(relDev, relStdDev)
+      DiagnosticOutput(
+          areRelDevsAcceptable
+          && areRelStdDevsAcceptable
+          && arePropsNearGroundTruthAcceptable)
     })
-    println(resultsPerSubsampleSize) //TMP
-    val areRelDevsAcceptable = resultsPerSubsampleSize
+  }
+  
+  private def areRelativeDeviationsAcceptable(resultsPerSubsampleSize: Seq[SingleDiagnosticResult]): Boolean = {
+    resultsPerSubsampleSize
       .map(_.relDev)
       .toSeq
       .aggregateNested(_.sliding(2).map(slidingWindow => slidingWindow(1) < slidingWindow(0) || slidingWindow(1) <= ACCEPTABLE_RELATIVE_MEAN_DEVIATION).forall(identity))
       .forall(_.forall(identity))
-    val areRelStdDevsAcceptable = resultsPerSubsampleSize
-      .map(_.relStdDev)
-      .toSeq
-      .aggregateNested(_.sliding(2).map(slidingWindow => slidingWindow(1) < slidingWindow(0) || slidingWindow(1) <= ACCEPTABLE_RELATIVE_STANDARD_DEVIATION).forall(identity))
-      .forall(_.forall(identity))
-    DiagnosticOutput(areRelDevsAcceptable && areRelStdDevsAcceptable)
   }
   
   private def computeRelativeDeviation[E <: ErrorQuantification](groundTruth: Seq[Seq[E]], subsamplingBootstrapOutputs: Seq[Seq[Seq[E]]]): Seq[Seq[Double]] = {
     subsamplingBootstrapOutputs
       .map(_.mapNested(_.toDouble))
-      .reduceNested(_ + _) //TODO: This is confusing.  Write a function to just compute the mean.
-      .mapNested(_ / subsamplingBootstrapOutputs.size.toDouble)
+      .aggregateNested(Statistics.mean)
       .zipNested(groundTruth.mapNested(_.toDouble))
       .mapNested({ case (bootstrapAverage, groundTruthResult) => (bootstrapAverage - groundTruthResult) / groundTruthResult }) //TODO: Handle div-by-zero
       .mapNested(math.abs)
+  }
+  
+  private def areRelativeStandardDeviationsAcceptable(resultsPerSubsampleSize: Seq[SingleDiagnosticResult]): Boolean = {
+    resultsPerSubsampleSize
+      .map(_.relStdDev)
+      .toSeq
+      .aggregateNested(_.sliding(2).map(slidingWindow => slidingWindow(1) < slidingWindow(0) || slidingWindow(1) <= ACCEPTABLE_RELATIVE_STANDARD_DEVIATION).forall(identity))
+      .forall(_.forall(identity))
   }
   
   private def computeNormalizedStandardDeviation[E <: ErrorQuantification](groundTruth: Seq[Seq[E]], subsamplingBootstrapOutputs: Seq[Seq[Seq[E]]]): Seq[Seq[Double]] = {
@@ -96,6 +124,22 @@ object DiagnosticRunner extends LogHelper {
       .zipNested(groundTruth.mapNested(_.toDouble))
       .mapNested({ case (bootstrapStdDev, groundTruthResult) => bootstrapStdDev / groundTruthResult }) //TODO: Handle div-by-zero
   }
+  
+  private def areProportionsNearGroundTruthAcceptable(resultsPerSubsampleSize: Seq[SingleDiagnosticResult]): Boolean = {
+    resultsPerSubsampleSize
+      .max(Ordering.by[SingleDiagnosticResult, Int](_.subsampleSize))
+      .proportionNearGroundTruth
+      .forall(_.forall(_ >= ACCEPTABLE_PROPORTION_NEAR_GROUND_TRUTH))
+  }
+  
+  private def computeProportionNearGroundTruth[E <: ErrorQuantification](groundTruth: Seq[Seq[E]], subsamplingBootstrapOutputs: Seq[Seq[Seq[E]]]): Seq[Seq[Double]] = {
+    subsamplingBootstrapOutputs
+      .map(_.mapNested(_.toDouble))
+      .map(_.zipNested(groundTruth.mapNested(_.toDouble)))
+      .map(_.mapNested({ case (bootstrapOutput, groundTruthResult) => math.abs((groundTruthResult - bootstrapOutput) / groundTruthResult) }))
+      .map(_.mapNested(relativeDeviation => if (relativeDeviation <= ACCEPTABLE_DEVIATION) 1.0 else 0.0))
+      .aggregateNested(Statistics.mean)
+  }
 }
 
-case class SingleDiagnosticResult(relDev: Seq[Seq[Double]], relStdDev: Seq[Seq[Double]])
+case class SingleDiagnosticResult(subsampleSize: Int, relDev: Seq[Seq[Double]], relStdDev: Seq[Seq[Double]], proportionNearGroundTruth: Seq[Seq[Double]])

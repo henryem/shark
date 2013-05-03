@@ -27,21 +27,23 @@ import blinkdb.util.HiveUtils
 import blinkdb.util.CollectionUtils._
 import blinkdb.parse.InputExtractionSemanticAnalyzer
 import blinkdb.util.ResampleGenerator
+import akka.dispatch.Future
+import akka.dispatch.ExecutionContext
 
 object BootstrapRunner extends LogHelper {
-  private val NUM_BOOTSTRAP_RESAMPLES = 5 //TODO: 50?
+  private val NUM_BOOTSTRAP_RESAMPLES = 20 //TODO: 100?
   
   def doBootstrap[E <: ErrorQuantification](
       cmd: String,
       inputRdd: RDD[Any],
       errorQuantifier: ErrorQuantifier[E],
       conf: HiveConf,
-      seed: Int):
-      Seq[Seq[E]] = {
+      seed: Int)
+      (implicit ec: ExecutionContext):
+      Future[Seq[Seq[E]]] = {
     //FIXME: Use a random seed.
     val resampleRdds = ResampleGenerator.generateResamples(inputRdd, BootstrapRunner.NUM_BOOTSTRAP_RESAMPLES, seed)
     val resultRdds = resampleRdds.map({ resampleRdd => 
-      println("Running an iteration of the bootstrap.") //TMP
       //TODO: Reuse semantic analysis across runs.  For now this avoids the
       // hassle of reaching into the graph and replacing the resample RDD,
       // and it also avoids any bugs that might result from executing an
@@ -49,8 +51,9 @@ object BootstrapRunner extends LogHelper {
       val sem = QueryRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf, Some(resampleRdd))
       QueryRunner.executeOperatorTree(sem)
     })
-    val bootstrapOutputs = QueryRunner.collectQueryOutputs(resultRdds)
-    println("Bootstrap outputs: %s".format(bootstrapOutputs)) //TMP
-    errorQuantifier.computeError(bootstrapOutputs)
+    val bootstrapOutputsFuture = QueryRunner.collectQueryOutputs(resultRdds)
+    bootstrapOutputsFuture.map(bootstrapOutputs => {
+      errorQuantifier.computeError(bootstrapOutputs)
+    })
   }
 }

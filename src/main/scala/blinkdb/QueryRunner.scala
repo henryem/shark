@@ -19,6 +19,9 @@ import scala.collection.JavaConversions._
 import shark.execution.serialization.KryoSerializer
 import blinkdb.util.HiveUtils
 import shark.execution.IntermediateCacheOperator
+import akka.dispatch.Future
+import blinkdb.util.FutureRddOps._
+import akka.dispatch.ExecutionContext
 
 object QueryRunner extends LogHelper {
 
@@ -28,7 +31,7 @@ object QueryRunner extends LogHelper {
     }
     val sourceOperators: Seq[shark.execution.Operator[_]] = getSourceOperators(sem)
     def visit(operator: shark.execution.Operator[_]) {
-      log.debug(
+      logDebug(
           "Operator %s, hiveOp %s, objectInspectors %s, children %s".format(
               operator,
               operator.hiveOp.getClass(),
@@ -86,6 +89,10 @@ object QueryRunner extends LogHelper {
     terminalOp.initializeMasterOnAll()
   }
   
+  /** 
+   * Execute the operator tree in @sem, producing an output RDD and an
+   * ObjectInspector that can be used to interpret its rows.
+   */
   def executeOperatorTree(sem: BaseSemanticAnalyzer): (RDD[Any], StructObjectInspector) = {
     val sinkOperators: Seq[shark.execution.Operator[_]] = getSinkOperators(sem)
     initializeOperatorTree(sem)
@@ -99,31 +106,36 @@ object QueryRunner extends LogHelper {
   
   
   /**
-   * Collect outputs from query runs @outputRdds.  All of them are
-   * collected at once so that we can collect them concurrently, which may be
-   * advantageous if individual runs do not use all available cluster
-   * resources.  Currently, rows are expected to have only numeric
-   * primitive fields.
+   * Collect outputs from query runs @outputRdds.  Currently, rows are
+   * expected to have only numeric primitive fields.
+   * 
+   * This is just a convenience method for mapping collectSingleQueryOutput()
+   * over a sequence of RDDs.
    */
-  def collectQueryOutputs(outputRdds: Seq[(RDD[_], StructObjectInspector)]): Seq[SingleQueryIterateOutput] = {
+  def collectQueryOutputs(outputRdds: Seq[(RDD[_], StructObjectInspector)])(implicit ec: ExecutionContext): Future[Seq[SingleQueryIterateOutput]] = {
     //TODO: Share ObjectInspectors across RDDs.  Serializing them repeatedly
     // here is wasteful.
-    outputRdds
-      .par
-      .map({ case (outputRdd, objectInspector) => collectSingleQueryOutput(outputRdd, objectInspector) })
-      .seq
+    Future.sequence(outputRdds.map({ case (outputRdd, objectInspector) => collectSingleQueryOutput(outputRdd, objectInspector) }))
   }
   
-  // Collect outputs from a single query run @rdd, using @objectInspector
-  // to inspect each row.  Currently, rows are expected to have only numeric
-  // primitive fields.
-  private def collectSingleQueryOutput(rdd: RDD[_], objectInspector: StructObjectInspector): SingleQueryIterateOutput = {
+  /** 
+   * Collect outputs from a single query run @rdd, using @objectInspector
+   * to inspect each row.  Currently, rows are expected to have only numeric
+   * primitive fields.
+   */
+  def collectSingleQueryOutput(
+      rdd: RDD[_],
+      objectInspector: StructObjectInspector)
+      (implicit ec: ExecutionContext):
+      Future[SingleQueryIterateOutput] = {
     val objectInspectorSerialized = KryoSerializer.serialize(objectInspector)
-    val rawOutputs = rdd
+    val rawOutputsFuture = rdd
       .map(hiveRow => HiveUtils.toNumericRow(hiveRow, KryoSerializer.deserialize(objectInspectorSerialized)))
-      .collect()
-    val numRows = rawOutputs.size
-    val numFields = if (numRows > 0) rawOutputs(0).size else 0
-    SingleQueryIterateOutput(rawOutputs, numRows, numFields)
+      .collectFuture()
+    rawOutputsFuture.map(rawOutputs => {
+      val numRows = rawOutputs.size
+      val numFields = if (numRows > 0) rawOutputs(0).size else 0
+      SingleQueryIterateOutput(rawOutputs, numRows, numFields)
+    })
   }
 }

@@ -9,6 +9,7 @@ import shark.execution.RddScanOperator
 import shark.execution.TerminalOperator
 import spark.RDD
 import shark.parse.SharkSemanticAnalyzer
+import shark.execution.OperatorFactory
 
 class InputExtractionSemanticAnalyzer(conf: HiveConf) extends SharkSemanticAnalyzer(conf) {
   //HACK: This should be part of a proper API.
@@ -48,6 +49,13 @@ class BootstrapSemanticAnalyzer(conf: HiveConf, inputRdd: RDD[Any]) extends Shar
     val child = postInputScanOperatorAndChildren._2.apply(0)
     BlinkDbSemanticAnalyzers.insertRddScanOperator(child, parent, inputRdd)
     terminalOps
+  }
+  
+  override def createOutputPlan(hiveOp: HiveOperator): Option[TerminalOperator] = {
+    // We always use a TableRddSinkOperator.  The usual FileSinkOperator will
+    // collect the result RDD before returning it, which is undesirable for
+    // performance reasons.
+    Some(OperatorFactory.createSharkRddOutputPlan(hiveOp))
   }
 }
 

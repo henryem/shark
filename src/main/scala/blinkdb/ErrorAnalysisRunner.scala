@@ -6,6 +6,11 @@ import spark.RDD
 import shark.LogHelper
 import shark.execution.RddCacheHelper
 import java.util.Random
+import akka.dispatch.ExecutionContext
+import java.util.concurrent.Executors
+import akka.dispatch.Await
+import akka.util.Duration
+import akka.dispatch.Future
 
 object ErrorAnalysisRunner extends LogHelper {
   /** 
@@ -19,7 +24,6 @@ object ErrorAnalysisRunner extends LogHelper {
    *   If no bootstrap is run (e.g. because the query is creating a table or
    *   updating rows, rather than selecting aggregates), None is returned.
    *   
-   *   TODO: Wrap the return value into a single object.
    *   TODO: Support columns without error quantifications, e.g. adding city as
    *     one of the selected columns in the above query.
    */
@@ -28,12 +32,24 @@ object ErrorAnalysisRunner extends LogHelper {
       errorQuantifier: ErrorQuantifier[E],
       conf: HiveConf):
       Option[ErrorAnalysis[E]] = {
-    val inputRdd: Option[(RDD[Any], RddCacheHelper)] = makeInputRdd(cmd, conf)
-    val random = new Random(123) //FIXME
-    inputRdd.map(rdd => {
-      ErrorAnalysis(
-          BootstrapRunner.doBootstrap(cmd, rdd._1, errorQuantifier, conf, random.nextInt),
-          DiagnosticRunner.doDiagnostic(cmd, rdd._1, rdd._2, errorQuantifier, conf, random.nextInt))
+    val inputRddOpt: Option[RDD[Any]] = makeInputRdd(cmd, conf)
+    inputRddOpt.map(rdd => {
+      rdd.count //HACK: Force the RDD to be in cache.  Not sure if Spark is
+                // smart enough to avoid computing it multiple times if we
+                // call collect() concurrently, even if the RDD is marked as
+                // cached.
+      val random = new Random(123) //FIXME
+      //TODO: May need to tune the thread pool.  This thread pool is mostly
+      // going to be waiting on I/O, so we want to allow as many as can be
+      // used.
+      val executorService = Executors.newCachedThreadPool()
+      implicit val ec = ExecutionContext.fromExecutorService(executorService)
+      val bootstrapFuture = BootstrapRunner.doBootstrap(cmd, rdd, errorQuantifier, conf, random.nextInt)
+      val diagnosticFuture = DiagnosticRunner.doDiagnostic(cmd, rdd, errorQuantifier, conf, random.nextInt)
+      val errorAnalysisFuture = bootstrapFuture.zip(diagnosticFuture).map({case (bootstrap, diagnostic) => ErrorAnalysis(bootstrap, diagnostic) })
+      val errorAnalysis = Await.result(errorAnalysisFuture, Duration.Inf)
+      executorService.shutdown()
+      errorAnalysis
     })
   }
   
@@ -44,7 +60,7 @@ object ErrorAnalysisRunner extends LogHelper {
    * 
    * @return None if @cmd is not suitable for extracting input.
    */
-  private def makeInputRdd(cmd: String, conf: HiveConf): Option[(RDD[Any], RddCacheHelper)] = {
+  private def makeInputRdd(cmd: String, conf: HiveConf): Option[RDD[Any]] = {
     val sem = QueryRunner.doSemanticAnalysis(cmd, BootstrapStage.InputExtraction, conf, None)
     if (!sem.isInstanceOf[InputExtractionSemanticAnalyzer]
         || !sem.asInstanceOf[SemanticAnalyzer].getParseContext().getQB().getIsQuery()) {
@@ -58,7 +74,7 @@ object ErrorAnalysisRunner extends LogHelper {
     
       //TODO: Handle more than 1 sink.
       require(intermediateInputOperators.size == 1)
-      Some((intermediateInputOperators(0).execute().asInstanceOf[RDD[Any]], intermediateInputOperators(0).getRddCacher()))
+      Some(intermediateInputOperators(0).execute().asInstanceOf[RDD[Any]])
     }
   }
 }

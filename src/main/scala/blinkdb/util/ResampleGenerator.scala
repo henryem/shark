@@ -22,25 +22,25 @@ object ResampleGenerator {
         originalTableWithWeights,
         numResamples,
         originalTableWithWeights.partitions.length,
-        seed) //FIXME: Random seed here.
-     val unweightedResamples = resamples.map(_.flatMap(fromWeightedRow)) //TMP
-     println("Resample sizes: %s".format(unweightedResamples.map(_.count()))) //TMP
+        seed)
+     val unweightedResamples = resamples.map(_.flatMap(fromWeightedRow))
      unweightedResamples
   }
   
   /**
    * Create @numSubsamples subsamples from @originalRdd.  Each subsample is a
    * simple random sample with replacement from @originalRdd, having size
-   * @subsampleSize.  The actual sampling process may only provide an
-   * approximation to this sampling process.
+   * @subsampleSize.
+   * 
+   * The actual sampling process may only provide an approximation to this
+   * sampling process.
    * 
    * @param originalRdd should be cached.
+   * @param originalRddSize should be equal to @originalRdd.count.  It is
+   *   passed here as a parameter for efficiency reasons only.
    */
-  def generateSubsamples[I: ClassManifest](originalRdd: RDD[I], originalRddCacher: RddCacheHelper, numSubsamples: Int, subsampleSize: Int, seed: Int): Seq[RDD[I]] = {
+  def generateSubsamples[I: ClassManifest](originalRdd: RDD[I], numSubsamples: Int, subsampleSize: Int, originalRddSize: Long, seed: Int): Seq[RDD[I]] = {
     //TODO: Use a single partition for each subsample.
-    //TODO: Avoid the call to count() here by getting the information upstream,
-    // when this RDD was originally cached and collected.
-    val subsampleProportion = subsampleSize.toDouble / originalRdd.count()
     //TODO: This method produces approximate sample sizes, not exact ones.
     // We may need to do exact sampling, since the subsample size can be very
     // small (e.g. 100) and originalRdd.count() can be arbitrarily large.
@@ -48,14 +48,14 @@ object ResampleGenerator {
     // subsampling in a way that does not require caching.  This implementation
     // does not do sampling without replacement to form the subsamples.  I
     // believe caching is required to do sampling without replacement
-    // efficiently.  @originalRddCacher can be used for this purpose, but
-    // currently it is unused.
+    // efficiently.
+    val subsamplingRate = subsampleSize / originalRddSize.toDouble
     (0 until numSubsamples).map({subsampleIdx =>
       val numPartitions = originalRdd.partitions.size
       originalRdd.mapPartitionsWithIndex({(partitionIdx: Int, partition: Iterator[I]) =>
         val partitionSeed = seed + subsampleIdx*numPartitions + partitionIdx
         val random = new Random(partitionSeed)
-        val bernoulli = new BernoulliDistribution(subsampleProportion, partitionSeed)
+        val bernoulli = new BernoulliDistribution(subsamplingRate, partitionSeed)
         partition.filter(d => bernoulli.sample())
       })
     })
