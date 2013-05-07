@@ -3,7 +3,6 @@ import spark.RDD
 import akka.dispatch.Future
 import akka.dispatch.Dispatcher
 import akka.dispatch.ExecutionContext
-import SparkUtils._
 import spark.SparkEnv
 
 object FutureRddOps {
