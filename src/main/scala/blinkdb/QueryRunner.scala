@@ -22,6 +22,7 @@ import shark.execution.IntermediateCacheOperator
 import akka.dispatch.Future
 import blinkdb.util.FutureRddOps._
 import akka.dispatch.ExecutionContext
+import org.apache.hadoop.hive.ql.parse.SemanticException
 
 object QueryRunner extends LogHelper {
 
@@ -42,19 +43,23 @@ object QueryRunner extends LogHelper {
     sourceOperators.foreach(visit)
   }
   
-  def doSemanticAnalysis(cmd: String, stage: ErrorAnalysisStage, conf: HiveConf, inputRdd: Option[RDD[Any]]): BaseSemanticAnalyzer = {
-    val command = new VariableSubstitution().substitute(conf, cmd)
-    val context = new QueryContext(conf, false)
-    context.setCmd(cmd)
-    context.setTryCount(Integer.MAX_VALUE)
+  def doSemanticAnalysis(cmd: String, stage: ErrorAnalysisStage, conf: HiveConf, inputRdd: Option[RDD[Any]]): Option[BaseSemanticAnalyzer] = {
+    try {
+      val command = new VariableSubstitution().substitute(conf, cmd)
+      val context = new QueryContext(conf, false)
+      context.setCmd(cmd)
+      context.setTryCount(Integer.MAX_VALUE)
 
-    val tree = ParseUtils.findRootNonNullToken((new ParseDriver()).parse(command, context))
-    val sem = BlinkDbSemanticAnalyzerFactory.get(conf, tree, stage, inputRdd)
-    
-    //TODO: Currently I do not include configured SemanticAnalyzer hooks.
-    sem.analyze(tree, context)
-    sem.validate()
-    sem
+      val tree = ParseUtils.findRootNonNullToken((new ParseDriver()).parse(command, context))
+      val sem = BlinkDbSemanticAnalyzerFactory.get(conf, tree, stage, inputRdd)
+
+      //TODO: Currently I do not include configured SemanticAnalyzer hooks.
+      sem.analyze(tree, context)
+      sem.validate()
+      Some(sem)
+    } catch {
+      case e: SemanticException => None
+    }
   }
   
   private def getSourceOperators(sem: BaseSemanticAnalyzer): Seq[shark.execution.Operator[_]] = {

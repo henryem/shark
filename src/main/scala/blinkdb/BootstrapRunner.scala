@@ -41,15 +41,15 @@ object BootstrapRunner extends LogHelper {
       seed: Int)
       (implicit ec: ExecutionContext):
       Future[Seq[Seq[E]]] = {
-    //FIXME: Use a random seed.
     val resampleRdds = ResampleGenerator.generateResamples(inputRdd, BootstrapRunner.NUM_BOOTSTRAP_RESAMPLES, seed)
     val resultRdds = resampleRdds.map({ resampleRdd => 
       //TODO: Reuse semantic analysis across runs.  For now this avoids the
       // hassle of reaching into the graph and replacing the resample RDD,
       // and it also avoids any bugs that might result from executing an
       // operator graph more than once.
-      val sem = QueryRunner.doSemanticAnalysis(cmd, ErrorAnalysisStage.BootstrapExecution, conf, Some(resampleRdd))
-      QueryRunner.executeOperatorTree(sem)
+      val semOpt = QueryRunner.doSemanticAnalysis(cmd, ErrorAnalysisStage.BootstrapExecution, conf, Some(resampleRdd))
+      require(semOpt.isDefined) //FIXME
+      QueryRunner.executeOperatorTree(semOpt.get)
     })
     val bootstrapOutputsFuture = QueryRunner.collectQueryOutputs(resultRdds)
     bootstrapOutputsFuture.map(bootstrapOutputs => {

@@ -68,20 +68,17 @@ object ErrorAnalysisRunner extends LogHelper {
    * @return None if @cmd is not suitable for extracting input.
    */
   private def makeInputRdd(cmd: String, conf: HiveConf): Option[RDD[Any]] = {
-    val sem = QueryRunner.doSemanticAnalysis(cmd, ErrorAnalysisStage.InputExtraction, conf, None)
-    if (!sem.isInstanceOf[InputExtractionSemanticAnalyzer]
-        || !sem.asInstanceOf[SemanticAnalyzer].getParseContext().getQB().getIsQuery()) {
-      //TODO: With Sameer's SQL parser, this will be unnecessary - we can just
-      // check whether the user explicitly asked for an approximation.  For now
-      // we execute the bootstrap on anything that looks like a query.
-      None
-    } else {
-      val intermediateInputOperators = QueryRunner.getIntermediateInputOperators(sem)
-      QueryRunner.initializeOperatorTree(sem)
-    
-      //TODO: Handle more than 1 sink.
-      require(intermediateInputOperators.size == 1)
-      Some(intermediateInputOperators(0).execute().asInstanceOf[RDD[Any]])
-    }
+    val semOpt = QueryRunner.doSemanticAnalysis(cmd, ErrorAnalysisStage.InputExtraction, conf, None)
+    semOpt
+      .filter(_.isInstanceOf[InputExtractionSemanticAnalyzer])
+      .filter(_.asInstanceOf[SemanticAnalyzer].getParseContext().getQB().getIsQuery())
+      .map(sem => {
+        val intermediateInputOperators = QueryRunner.getIntermediateInputOperators(sem)
+        QueryRunner.initializeOperatorTree(sem)
+      
+        //TODO: Handle more than 1 sink.
+        require(intermediateInputOperators.size == 1)
+        intermediateInputOperators(0).execute().asInstanceOf[RDD[Any]]
+      })
   }
 }

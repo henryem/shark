@@ -56,7 +56,9 @@ object DiagnosticRunner extends LogHelper {
         // hassle of reaching into the graph and replacing the resample RDD,
         // and it also avoids any bugs that might result from executing an
         // operator graph more than once.
-        val sem = QueryRunner.doSemanticAnalysis(cmd, ErrorAnalysisStage.DiagnosticExecution, conf, Some(subsampleRdd))
+        val semOpt = QueryRunner.doSemanticAnalysis(cmd, ErrorAnalysisStage.DiagnosticExecution, conf, Some(subsampleRdd))
+        require(semOpt.isDefined) //FIXME
+        val sem = semOpt.get
         //TODO: Restrict Shark to use only a single partition for this subsample.
         val (trueQueryOutputRdd, objectInspector) = QueryRunner.executeOperatorTree(sem)
         val trueQueryOutputFuture = QueryRunner.collectSingleQueryOutput(trueQueryOutputRdd, objectInspector)
