@@ -29,9 +29,10 @@ import blinkdb.parse.InputExtractionSemanticAnalyzer
 import blinkdb.util.ResampleGenerator
 import akka.dispatch.Future
 import akka.dispatch.ExecutionContext
+import blinkdb.util.LoggingUtils
 
 object BootstrapRunner extends LogHelper {
-  private val NUM_BOOTSTRAP_RESAMPLES = 100
+  private val NUM_BOOTSTRAP_RESAMPLES = 10 //TMP
   
   def doBootstrap[E <: ErrorQuantification](
       cmd: String,
@@ -41,7 +42,10 @@ object BootstrapRunner extends LogHelper {
       seed: Int)
       (implicit ec: ExecutionContext):
       Future[Seq[Seq[E]]] = {
+    val resampleTimer = LoggingUtils.startCount("Creating resample input RDDs")
     val resampleRdds = ResampleGenerator.generateResamples(inputRdd, BootstrapRunner.NUM_BOOTSTRAP_RESAMPLES, seed)
+    resampleTimer.stop()
+    val queryCreationTimer = LoggingUtils.startCount("Creating resample queries and forming output RDDs")
     val resultRdds = resampleRdds.map({ resampleRdd => 
       //TODO: Reuse semantic analysis across runs.  For now this avoids the
       // hassle of reaching into the graph and replacing the resample RDD,
@@ -51,6 +55,7 @@ object BootstrapRunner extends LogHelper {
       require(semOpt.isDefined) //FIXME
       QueryRunner.executeOperatorTree(semOpt.get)
     })
+    queryCreationTimer.stop()
     val bootstrapOutputsFuture = QueryRunner.collectQueryOutputs(resultRdds)
     bootstrapOutputsFuture.map(bootstrapOutputs => {
       errorQuantifier.computeError(bootstrapOutputs)

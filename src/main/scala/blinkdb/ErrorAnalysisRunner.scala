@@ -11,6 +11,7 @@ import java.util.concurrent.Executors
 import akka.dispatch.Await
 import akka.util.Duration
 import akka.dispatch.Future
+import blinkdb.util.LoggingUtils
 
 object ErrorAnalysisRunner extends LogHelper {
   /** 
@@ -32,7 +33,9 @@ object ErrorAnalysisRunner extends LogHelper {
       errorQuantifier: ErrorQuantifier[E],
       conf: HiveConf):
       Option[ErrorAnalysis[E]] = {
+    val inputRddCreationTimer = LoggingUtils.startCount("Creating a query to select the original query's input")
     val inputRddOpt: Option[RDD[Any]] = makeInputRdd(cmd, conf)
+    inputRddCreationTimer.stop()
     inputRddOpt.map(rdd => {
       //NOTE: We count the input here for two reasons:
       //  1. This forces the RDD to be in cache.  I'm not sure if Spark is not
@@ -40,9 +43,11 @@ object ErrorAnalysisRunner extends LogHelper {
       //     collect() concurrently, even if the RDD is marked as cached.
       //  2. Some error analysis operations require knowing the size of the
       //     input.
+      val inputCachingTimer = LoggingUtils.startCount("Caching input from the original query")
       val inputSize = rdd.count
+      inputCachingTimer.stop()
       logInfo("Running analysis on a dataset of %d rows.".format(inputSize))
-      val analysisStartTimeNanos = System.nanoTime()
+      val analysisTimer = LoggingUtils.startCount("Running error analysis")
       val random = new Random(123) //FIXME
       //TODO: May need to tune the thread pool.  This thread pool is mostly
       // going to be waiting on I/O, so we want to allow as many as can be
@@ -51,11 +56,13 @@ object ErrorAnalysisRunner extends LogHelper {
       implicit val ec = ExecutionContext.fromExecutorService(executorService)
       val bootstrapFuture = BootstrapRunner.doBootstrap(cmd, rdd, errorQuantifier, conf, random.nextInt)
       val diagnosticFuture = DiagnosticRunner.doDiagnostic(cmd, rdd, inputSize, errorQuantifier, conf, random.nextInt)
+//      val diagnosticFuture = Future{DiagnosticOutput(true)} //TMP
       val errorAnalysisFuture = bootstrapFuture.zip(diagnosticFuture).map({case (bootstrap, diagnostic) => ErrorAnalysis(bootstrap, diagnostic) })
+      val analysisExecutionTimer = LoggingUtils.startCount("Waiting for analysis to execute in the cluster")
       val errorAnalysis = Await.result(errorAnalysisFuture, Duration.Inf)
+      analysisExecutionTimer.stop()
       executorService.shutdown()
-      val analysisFinishTimeNanos = System.nanoTime()
-      logInfo("Analysis took %d nanoseconds.".format(analysisFinishTimeNanos - analysisStartTimeNanos)) //TMP
+      analysisTimer.stop()
       errorAnalysis
     })
   }
