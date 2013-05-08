@@ -10,6 +10,7 @@ import spark.RDD
 import shark.parse.SharkSemanticAnalyzerFactory
 import shark.parse.SharkSemanticAnalyzer
 import blinkdb.ErrorAnalysisStage
+import org.apache.hadoop.hive.ql.parse.HiveParser
 
 object BlinkDbSemanticAnalyzerFactory {
 
@@ -19,7 +20,7 @@ object BlinkDbSemanticAnalyzerFactory {
   def get(conf: HiveConf, tree:ASTNode, analysisStage: ErrorAnalysisStage, inputRdd: Option[RDD[Any]]): BaseSemanticAnalyzer = {
     //TODO: Taking @inputRdd as an argument is a bit inelegant.
     val baseSem = SharkSemanticAnalyzerFactory.get(conf, tree)
-    if (baseSem.isInstanceOf[SharkSemanticAnalyzer]) {
+    if (baseSem.isInstanceOf[SharkSemanticAnalyzer] && shouldHandleQuery(baseSem.asInstanceOf[SharkSemanticAnalyzer])) {
       analysisStage match {
         case ErrorAnalysisStage.InputExtraction => new InputExtractionSemanticAnalyzer(conf)
         case ErrorAnalysisStage.BootstrapExecution => new BootstrapSemanticAnalyzer(conf, inputRdd.get)
@@ -30,4 +31,12 @@ object BlinkDbSemanticAnalyzerFactory {
     }
   }
   
+  private def shouldHandleQuery(queryTree: ASTNode): Boolean = {
+    if (queryTree.getToken().getType() == HiveParser.TOK_CREATETABLE) {
+      // We don't want to handle create table or CTAS queries.
+      false
+    } else {
+      true
+    }
+  }
 }
