@@ -41,16 +41,13 @@ object DiagnosticRunner extends LogHelper {
   def doDiagnostic[E <: ErrorQuantification](
       cmd: String,
       inputRdd: RDD[Any],
+      inputRddSize: Long,
       errorQuantifier: ErrorQuantifier[E],
       conf: HiveConf,
       seed: Int)
       (implicit ec: ExecutionContext):
       Future[DiagnosticOutput] = {
-    //TODO: Implement diagnostic step 3.
     val random = new Random(seed)
-    //TODO: Put this in a future.  This will require putting the subsample
-    // RDDs into futures as well.
-    val inputRddSize = inputRdd.count
     //TODO: This is a little hard to read.
     val resultsPerSubsampleSizeFuture: Future[Seq[SingleDiagnosticResult]] = Future.sequence(DIAGNOSTIC_SUBSAMPLE_SIZES.map({ subsampleSize =>
       val subsampleRdds = ResampleGenerator.generateSubsamples(inputRdd, NUM_DIAGNOSTIC_SUBSAMPLES, subsampleSize, inputRddSize, random.nextInt)
@@ -59,7 +56,7 @@ object DiagnosticRunner extends LogHelper {
         // hassle of reaching into the graph and replacing the resample RDD,
         // and it also avoids any bugs that might result from executing an
         // operator graph more than once.
-        val sem = QueryRunner.doSemanticAnalysis(cmd, BootstrapStage.DiagnosticExecution, conf, Some(subsampleRdd))
+        val sem = QueryRunner.doSemanticAnalysis(cmd, ErrorAnalysisStage.DiagnosticExecution, conf, Some(subsampleRdd))
         //TODO: Restrict Shark to use only a single partition for this subsample.
         val (trueQueryOutputRdd, objectInspector) = QueryRunner.executeOperatorTree(sem)
         val trueQueryOutputFuture = QueryRunner.collectSingleQueryOutput(trueQueryOutputRdd, objectInspector)

@@ -5,8 +5,9 @@ import edu.berkeley.blbspark.WeightedItem
 import shark.execution.RddCacheHelper
 import edu.berkeley.blbspark.dist.BernoulliDistribution
 import java.util.Random
+import shark.LogHelper
 
-object ResampleGenerator {
+object ResampleGenerator extends LogHelper {
   /** 
    * Create @numResamples resamples from @originalRdd.  Each resample is a
    * simple random sample with replacement from @originalRdd, having size
@@ -50,6 +51,7 @@ object ResampleGenerator {
     // believe caching is required to do sampling without replacement
     // efficiently.
     val subsamplingRate = subsampleSize / originalRddSize.toDouble
+    logInfo("Subsampling rate: %f (%d/%d)".format(subsamplingRate, subsampleSize, originalRddSize))
     (0 until numSubsamples).map({subsampleIdx =>
       val numPartitions = originalRdd.partitions.size
       originalRdd.mapPartitionsWithIndex({(partitionIdx: Int, partition: Iterator[I]) =>

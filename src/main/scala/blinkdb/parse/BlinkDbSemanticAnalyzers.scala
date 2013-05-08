@@ -79,7 +79,36 @@ object BlinkDbSemanticAnalyzers {
   def getPostInputScanOperators(topOperators: Seq[shark.execution.Operator[_ <: HiveOperator]]): Map[shark.execution.Operator[_], Seq[shark.execution.Operator[_]]] = {
     //TODO: Currently only the top operators are used.  Instead we should
     // find an appropriate SelectOperator or FilterOperator.
-    topOperators.map(op => (op, op.childOperators)).toMap
+    //TODO: Support non-linear graphs.
+    //TODO: Clarify what a "post-input scan operator" is.
+    val cutOperators: Seq[shark.execution.Operator[_ <: HiveOperator]] = topOperators.flatMap(op => getPostInputScanOperators(op)).distinct
+    val cut: Seq[(shark.execution.Operator[_], Seq[shark.execution.Operator[_]])] = cutOperators.map(op => (op, op.childOperators))
+    cut.toMap
+  }
+  
+  // Get all post-input scan operators below @operator.
+  private def getPostInputScanOperators(operator: shark.execution.Operator[_ <: HiveOperator]): Seq[shark.execution.Operator[_ <: HiveOperator]] = {
+    if (! operator.childOperators.map(child => isOneToSomeOperator(child)).forall(identity)) {
+      List(operator)
+    } else {
+      //HACK: Need to figure out how to remove this cast - it's ugly, though harmless.
+      operator.childOperators
+        .flatMap(op => getPostInputScanOperators(op.asInstanceOf[shark.execution.Operator[_ <: HiveOperator]]))
+        .distinct
+    }
+  }
+  
+  // True if @operator scans a table or deterministically maps each input row
+  // to 0 or 1 outputs.  For example, projection and filter operators that
+  // evaluate deterministic functions satisfy this.  Group-by operators,
+  // which map several rows to a single row, do not.
+  private def isOneToSomeOperator(operator: shark.execution.Operator[_]): Boolean = {
+    //TODO: Not sure if there should be more operators in this list, or if
+    // there is an automatic way to implement this.
+    operator.isInstanceOf[shark.execution.TableScanOperator] ||
+      operator.isInstanceOf[shark.execution.SelectOperator] ||
+      operator.isInstanceOf[shark.execution.FilterOperator] ||
+      operator.isInstanceOf[shark.execution.ForwardOperator]
   }
   
   /** 

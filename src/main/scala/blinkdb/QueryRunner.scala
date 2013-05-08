@@ -42,7 +42,7 @@ object QueryRunner extends LogHelper {
     sourceOperators.foreach(visit)
   }
   
-  def doSemanticAnalysis(cmd: String, stage: BootstrapStage, conf: HiveConf, inputRdd: Option[RDD[Any]]): BaseSemanticAnalyzer = {
+  def doSemanticAnalysis(cmd: String, stage: ErrorAnalysisStage, conf: HiveConf, inputRdd: Option[RDD[Any]]): BaseSemanticAnalyzer = {
     val command = new VariableSubstitution().substitute(conf, cmd)
     val context = new QueryContext(conf, false)
     context.setCmd(cmd)

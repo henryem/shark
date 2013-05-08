@@ -41,13 +41,15 @@ trait ErrorQuantifier[Q <: ErrorQuantification] {
     //TODO: If there are no bootstrap outputs, we don't know how many fields
     // there would have been.  Currently we just return no error
     // quantifications.
+    //TODO: If the outputs don't match expectations, warn and throw them away.
+    // If more than a couple are thrown away, fail.
     if (bootstrapOutputs.size == 0) {
       return Nil
     }
     val (numFields, numRows) = bootstrapOutputs.map(output => (output.numFields, output.numRows)).head
     for (output <- bootstrapOutputs) {
-      require(output.numFields == numFields)
-      require(output.numRows == numRows)
+      require(output.numFields == numFields, "The number of columns selected in the bootstrap must equal the number of columns in the original query's output.")
+      require(output.numRows == numRows, "The number of rows in bootstrap output must equal the number of rows in the original query's output.")
     }
     (0 until numRows).map(rowIdx => {
       val currentRowFromEachBootstrap = bootstrapOutputs.map(_.rows(rowIdx))

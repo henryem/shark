@@ -34,21 +34,28 @@ object ErrorAnalysisRunner extends LogHelper {
       Option[ErrorAnalysis[E]] = {
     val inputRddOpt: Option[RDD[Any]] = makeInputRdd(cmd, conf)
     inputRddOpt.map(rdd => {
-      rdd.count //HACK: Force the RDD to be in cache.  Not sure if Spark is
-                // smart enough to avoid computing it multiple times if we
-                // call collect() concurrently, even if the RDD is marked as
-                // cached.
+      //NOTE: We count the input here for two reasons:
+      //  1. This forces the RDD to be in cache.  I'm not sure if Spark is not
+      //     smart enough to avoid computing it multiple times if we call
+      //     collect() concurrently, even if the RDD is marked as cached.
+      //  2. Some error analysis operations require knowing the size of the
+      //     input.
+      val inputSize = rdd.count
+      logInfo("Running analysis on a dataset of %d rows.".format(inputSize))
+      val analysisStartTimeNanos = System.nanoTime()
       val random = new Random(123) //FIXME
       //TODO: May need to tune the thread pool.  This thread pool is mostly
       // going to be waiting on I/O, so we want to allow as many as can be
-      // used.
+      // used.  The number of threads used may be on the order of 20,000.
       val executorService = Executors.newCachedThreadPool()
       implicit val ec = ExecutionContext.fromExecutorService(executorService)
       val bootstrapFuture = BootstrapRunner.doBootstrap(cmd, rdd, errorQuantifier, conf, random.nextInt)
-      val diagnosticFuture = DiagnosticRunner.doDiagnostic(cmd, rdd, errorQuantifier, conf, random.nextInt)
+      val diagnosticFuture = DiagnosticRunner.doDiagnostic(cmd, rdd, inputSize, errorQuantifier, conf, random.nextInt)
       val errorAnalysisFuture = bootstrapFuture.zip(diagnosticFuture).map({case (bootstrap, diagnostic) => ErrorAnalysis(bootstrap, diagnostic) })
       val errorAnalysis = Await.result(errorAnalysisFuture, Duration.Inf)
       executorService.shutdown()
+      val analysisFinishTimeNanos = System.nanoTime()
+      logInfo("Analysis took %d nanoseconds.".format(analysisFinishTimeNanos - analysisStartTimeNanos)) //TMP
       errorAnalysis
     })
   }
@@ -61,7 +68,7 @@ object ErrorAnalysisRunner extends LogHelper {
    * @return None if @cmd is not suitable for extracting input.
    */
   private def makeInputRdd(cmd: String, conf: HiveConf): Option[RDD[Any]] = {
-    val sem = QueryRunner.doSemanticAnalysis(cmd, BootstrapStage.InputExtraction, conf, None)
+    val sem = QueryRunner.doSemanticAnalysis(cmd, ErrorAnalysisStage.InputExtraction, conf, None)
     if (!sem.isInstanceOf[InputExtractionSemanticAnalyzer]
         || !sem.asInstanceOf[SemanticAnalyzer].getParseContext().getQB().getIsQuery()) {
       //TODO: With Sameer's SQL parser, this will be unnecessary - we can just

@@ -31,7 +31,7 @@ import akka.dispatch.Future
 import akka.dispatch.ExecutionContext
 
 object BootstrapRunner extends LogHelper {
-  private val NUM_BOOTSTRAP_RESAMPLES = 20 //TODO: 100?
+  private val NUM_BOOTSTRAP_RESAMPLES = 100
   
   def doBootstrap[E <: ErrorQuantification](
       cmd: String,
@@ -48,7 +48,7 @@ object BootstrapRunner extends LogHelper {
       // hassle of reaching into the graph and replacing the resample RDD,
       // and it also avoids any bugs that might result from executing an
       // operator graph more than once.
-      val sem = QueryRunner.doSemanticAnalysis(cmd, BootstrapStage.BootstrapExecution, conf, Some(resampleRdd))
+      val sem = QueryRunner.doSemanticAnalysis(cmd, ErrorAnalysisStage.BootstrapExecution, conf, Some(resampleRdd))
       QueryRunner.executeOperatorTree(sem)
     })
     val bootstrapOutputsFuture = QueryRunner.collectQueryOutputs(resultRdds)
