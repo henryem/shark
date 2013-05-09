@@ -39,12 +39,16 @@ object BootstrapRunner extends LogHelper {
       inputRdd: RDD[Any],
       errorQuantifier: ErrorQuantifier[E],
       conf: HiveConf,
+      errorAnalysisConf: ErrorAnalysisConf,
       seed: Int)
       (implicit ec: ExecutionContext):
       Future[Seq[Seq[E]]] = {
     val resampleTimer = LoggingUtils.startCount("Creating resample input RDDs")
     val resampleRdds = ResampleGenerator.generateResamples(inputRdd, BootstrapRunner.NUM_BOOTSTRAP_RESAMPLES, seed)
     resampleTimer.stop()
+    //NOTE: The validity of this timing number relies on resampleRdds being an
+    // eager collection.  There is no point in it being lazy, so this isn't a
+    // big deal.
     val queryCreationTimer = LoggingUtils.startCount("Creating resample queries and forming output RDDs")
     val resultRdds = resampleRdds.map({ resampleRdd => 
       //TODO: Reuse semantic analysis across runs.  For now this avoids the

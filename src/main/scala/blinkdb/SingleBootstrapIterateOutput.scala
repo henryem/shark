@@ -14,8 +14,8 @@ case class SingleQueryIterateOutput(rows: Seq[Seq[Double]], numRows: Int, numFie
  *   * The output of a diagnostic for the error estimation process itself.
  */
 case class ErrorAnalysis[E <: ErrorQuantification](
-    errorQuantifications: Seq[Seq[E]],
-    diagnosticOutput: DiagnosticOutput)
+    errorQuantifications: Option[Seq[Seq[E]]],
+    diagnosticOutput: Option[DiagnosticOutput])
 
 /** The output of a diagnostic for an error estimation process. */
 case class DiagnosticOutput(isPassed: Boolean)

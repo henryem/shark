@@ -48,6 +48,8 @@ import org.apache.hadoop.hive.serde2.objectinspector.PrimitiveObjectInspector
 import blinkdb.BootstrapRunner
 import blinkdb.StandardDeviationErrorQuantifier
 import blinkdb.ErrorAnalysisRunner
+import blinkdb.BlinkDbConf
+import blinkdb.ErrorAnalysisConf
 
 
 /**
@@ -175,7 +177,8 @@ class SharkDriver(conf: HiveConf) extends Driver(conf) with LogHelper {
   }
   
   private def runErrorAnalysis(cmd: String): Option[String] = {
-    ErrorAnalysisRunner.runForResult(cmd, StandardDeviationErrorQuantifier, conf).map(_.toString)
+    val errorAnalysisConf = BlinkDbConf.fromJavaOpts().errorAnalysisConf
+    ErrorAnalysisRunner.runForResult(cmd, StandardDeviationErrorQuantifier, conf, errorAnalysisConf).map(_.toString)
   }
 
   /**

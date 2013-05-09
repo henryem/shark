@@ -1,4 +1,6 @@
 package blinkdb.util
+import akka.dispatch.Future
+import akka.dispatch.ExecutionContext
 
 object CollectionUtils {
   implicit def toNestedOps[A](nestedSeq: Seq[Seq[A]]) = new NestedOps(nestedSeq)
@@ -31,4 +33,18 @@ object CollectionUtils {
     }
   }
   
+  /** 
+   * Convert an Option for a Future into a Future for an Option.
+   * 
+   * Akka's Future.sequence() is supposed to handle this kind of thing, but it
+   * does not work for Option; probably there is an elegant way to make it
+   * work, in which case this method should go away.
+   */
+  def sequence[A](futureOption: Option[Future[A]])(implicit ec: ExecutionContext): Future[Option[A]] = {
+    if (futureOption.isDefined) {
+      futureOption.get.map(item => Some(item))
+    } else {
+      Future{None}
+    }
+  }
 }
