@@ -6,6 +6,8 @@ import shark.execution.RddCacheHelper
 import edu.berkeley.blbspark.dist.BernoulliDistribution
 import java.util.Random
 import shark.LogHelper
+import cern.jet.random.Poisson
+import cern.jet.random.engine.DRand
 
 object ResampleGenerator extends LogHelper {
   /** 
@@ -26,6 +28,28 @@ object ResampleGenerator extends LogHelper {
         seed)
      val unweightedResamples = resamples.map(_.flatMap(fromWeightedRow))
      unweightedResamples
+  }
+  
+  def generateLocalResample[I](originalData: Seq[I], seed: Int, exact: Boolean): Seq[I] = {
+    if (exact) {
+      generateExactLocalResample(originalData, seed)
+    } else {
+      generateApproximateLocalResample(originalData, seed)
+    }
+  }
+  
+  //TODO: Test
+  private def generateApproximateLocalResample[I](originalData: Seq[I], seed: Int): Seq[I] = {
+    val poisson = new Poisson(1, new DRand(seed))
+    originalData.flatMap(datum => Iterator.empty.padTo(poisson.nextInt(), datum))
+  }
+  
+  //TODO: Test
+  private def generateExactLocalResample[I](originalData: Seq[I], seed: Int): Seq[I] = {
+    val random = new Random(seed)
+    (0 until originalData.size).map(sampleIdx => {
+      originalData(random.nextInt(originalData.size))
+    })
   }
   
   /**

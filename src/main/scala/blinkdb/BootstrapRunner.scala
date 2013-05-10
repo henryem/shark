@@ -32,8 +32,6 @@ import akka.dispatch.ExecutionContext
 import blinkdb.util.LoggingUtils
 
 object BootstrapRunner extends LogHelper {
-  private val NUM_BOOTSTRAP_RESAMPLES = 10 //TMP
-  
   def doBootstrap[E <: ErrorQuantification](
       cmd: String,
       inputRdd: RDD[Any],
@@ -44,7 +42,7 @@ object BootstrapRunner extends LogHelper {
       (implicit ec: ExecutionContext):
       Future[Seq[Seq[E]]] = {
     val resampleTimer = LoggingUtils.startCount("Creating resample input RDDs")
-    val resampleRdds = ResampleGenerator.generateResamples(inputRdd, BootstrapRunner.NUM_BOOTSTRAP_RESAMPLES, seed)
+    val resampleRdds = ResampleGenerator.generateResamples(inputRdd, errorAnalysisConf.bootstrapConf.numBootstrapResamples, seed)
     resampleTimer.stop()
     //NOTE: The validity of this timing number relies on resampleRdds being an
     // eager collection.  There is no point in it being lazy, so this isn't a

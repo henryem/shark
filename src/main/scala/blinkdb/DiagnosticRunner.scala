@@ -73,14 +73,21 @@ object DiagnosticRunner extends LogHelper {
       groundTruthFuture
         .zip(subsamplingBootstrapOutputsFuture)
         .map({case (groundTruth, subsamplingBootstrapOutputs) => 
-          val relDev: Seq[Seq[Double]] = computeRelativeDeviation(groundTruth, subsamplingBootstrapOutputs)
-          val relStdDev: Seq[Seq[Double]] = computeNormalizedStandardDeviation(groundTruth, subsamplingBootstrapOutputs)
-          val proportionNearGroundTruth: Seq[Seq[Double]] = computeProportionNearGroundTruth(groundTruth, subsamplingBootstrapOutputs, diagnosticConf)
-          SingleDiagnosticResult(subsampleSize, relDev, relStdDev, proportionNearGroundTruth)
+          computeSingleDiagnosticResult(subsampleSize, groundTruth, subsamplingBootstrapOutputs, diagnosticConf)
         })
     }))
-    resultsPerSubsampleSizeFuture.map(resultsPerSubsampleSize => {
-      println("Diagnostic results per subsample size: %s".format(resultsPerSubsampleSize)) //TMP
+    resultsPerSubsampleSizeFuture.map(resultsPerSubsampleSize => computeFinalDiagnostic(resultsPerSubsampleSize, diagnosticConf))
+  }
+  
+  def computeSingleDiagnosticResult[E <: ErrorQuantification](subsampleSize: Int, groundTruth: Seq[Seq[E]], bootstrapOutputs: Seq[Seq[Seq[E]]], diagnosticConf: DiagnosticConf): SingleDiagnosticResult = {
+    val relDev: Seq[Seq[Double]] = computeRelativeDeviation(groundTruth, bootstrapOutputs)
+    val relStdDev: Seq[Seq[Double]] = computeNormalizedStandardDeviation(groundTruth, bootstrapOutputs)
+    val proportionNearGroundTruth: Seq[Seq[Double]] = computeProportionNearGroundTruth(groundTruth, bootstrapOutputs, diagnosticConf)
+    SingleDiagnosticResult(subsampleSize, relDev, relStdDev, proportionNearGroundTruth)
+  }
+  
+  def computeFinalDiagnostic(resultsPerSubsampleSize: Seq[SingleDiagnosticResult], diagnosticConf: DiagnosticConf): DiagnosticOutput = {
+    println("Diagnostic results per subsample size: %s".format(resultsPerSubsampleSize)) //TMP
       val areRelDevsAcceptable = areRelativeDeviationsAcceptable(resultsPerSubsampleSize, diagnosticConf)
       val areRelStdDevsAcceptable = areRelativeStandardDeviationsAcceptable(resultsPerSubsampleSize, diagnosticConf)
       val arePropsNearGroundTruthAcceptable = areProportionsNearGroundTruthAcceptable(resultsPerSubsampleSize, diagnosticConf)
@@ -90,7 +97,6 @@ object DiagnosticRunner extends LogHelper {
           areRelDevsAcceptable
           && areRelStdDevsAcceptable
           && arePropsNearGroundTruthAcceptable)
-    })
   }
   
   private def areRelativeDeviationsAcceptable(resultsPerSubsampleSize: Seq[SingleDiagnosticResult], conf: DiagnosticConf): Boolean = {

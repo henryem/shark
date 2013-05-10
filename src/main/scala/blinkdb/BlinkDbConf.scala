@@ -78,7 +78,7 @@ case class DiagnosticConf(
 object DiagnosticConf {
   val DEFAULT_DO_DIAGNOSTIC = true
   val DEFAULT_NUM_DIAGNOSTIC_SUBSAMPLES = 100
-  val DEFAULT_DIAGNOSTIC_SUBSAMPLE_SIZES = List(100, 500, 1000)
+  val DEFAULT_DIAGNOSTIC_SUBSAMPLE_SIZES = List(250, 500, 1000)
   
   // An acceptable level of deviation between the average bootstrap output
   // and ground truth, normalized by ground truth.  This is c_1 in the
@@ -96,6 +96,17 @@ object DiagnosticConf {
   // See ACCEPTABLE_PROPORTION_NEAR_GROUND_TRUTH above.  This is c_3 in the
   // diagnostics paper.
   val DEFAULT_ACCEPTABLE_GROUND_TRUTH_DEVIATION = .2
+  
+  def default(): DiagnosticConf = {
+    DiagnosticConf(
+        DEFAULT_DO_DIAGNOSTIC,
+        DEFAULT_NUM_DIAGNOSTIC_SUBSAMPLES,
+        DEFAULT_DIAGNOSTIC_SUBSAMPLE_SIZES,
+        DEFAULT_ACCEPTABLE_RELATIVE_MEAN_DEVIATION,
+        DEFAULT_ACCEPTABLE_RELATIVE_STANDARD_DEVIATION,
+        DEFAULT_ACCEPTABLE_PROPORTION_NEAR_GROUND_TRUTH,
+        DEFAULT_ACCEPTABLE_GROUND_TRUTH_DEVIATION)
+  }
   
   def fromConf(conf: AbstractConfiguration): DiagnosticConf = {
     DiagnosticConf(
