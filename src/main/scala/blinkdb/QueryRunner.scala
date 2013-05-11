@@ -23,6 +23,31 @@ import akka.dispatch.Future
 import blinkdb.util.FutureRddOps._
 import akka.dispatch.ExecutionContext
 import org.apache.hadoop.hive.ql.parse.SemanticException
+import blinkdb.parse.BootstrapSemanticAnalyzer
+
+//TODO: Use this in BootstrapRunner etc to abstract away query execution rather than using QueryRunner methods.
+trait QueryExecution {
+  def collect(implicit ec: ExecutionContext): Future[SingleQueryIterateOutput]
+}
+
+class IndependentQueryExecution(cmd: String, stage: ErrorAnalysisStage, conf: HiveConf, inputRdd: Option[RDD[Any]])
+    extends QueryExecution {
+  override def collect(implicit ec: ExecutionContext): Future[SingleQueryIterateOutput] = {
+    val sem = QueryRunner.doSemanticAnalysis(cmd, stage, conf, inputRdd)
+    require(sem.isDefined) //FIXME
+    val (output, oi) = QueryRunner.executeOperatorTree(sem.get)
+    QueryRunner.collectSingleQueryOutput(output, oi)
+  }
+}
+
+class SharedOperatorTreeQueryExecution(sem: BootstrapSemanticAnalyzer, inputRdd: RDD[Any])
+    extends QueryExecution {
+  override def collect(implicit ec: ExecutionContext): Future[SingleQueryIterateOutput] = {
+//    sem.setInputRdd(inputRdd) //FIXME: Add this API to BootstrapSemanticAnalyzer.
+    val (output, oi) = QueryRunner.executeOperatorTree(sem)
+    QueryRunner.collectSingleQueryOutput(output, oi)
+  }
+}
 
 object QueryRunner extends LogHelper {
 

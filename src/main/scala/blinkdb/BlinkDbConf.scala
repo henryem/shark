@@ -48,6 +48,10 @@ object ErrorAnalysisConf {
   def fromConf(conf: AbstractConfiguration): ErrorAnalysisConf = {
     ErrorAnalysisConf(BootstrapConf.fromConf(conf), DiagnosticConf.fromConf(conf))
   }
+  
+  def default(): ErrorAnalysisConf = {
+    ErrorAnalysisConf(BootstrapConf.default, DiagnosticConf.default)
+  }
 }
     
 case class BootstrapConf(
@@ -62,6 +66,10 @@ object BootstrapConf {
     BootstrapConf(
         conf.getBoolean("blinkdb.bootstrap.doBootstrap", DEFAULT_DO_BOOTSTRAP),
         conf.getInt("blinkdb.bootstrap.numBootstrapResamples", DEFAULT_NUM_BOOTSTRAP_RESAMPLES))
+  }
+  
+  def default(): BootstrapConf = {
+    BootstrapConf(DEFAULT_DO_BOOTSTRAP, DEFAULT_NUM_BOOTSTRAP_RESAMPLES)
   }
 }
 
