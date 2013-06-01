@@ -50,7 +50,7 @@ object ExperimentRunner {
   def doDiagnosticTest(master: String, parallelism: Int, numRows: Int, method: DiagnosticMethod): DiagnosticOutput = {
     val sc = new SparkContext(master, "diagnosticExperiment")
     val data = fetchData(numRows, DATA_GENERATOR, sc, parallelism, FIXED_SEED)
-    method match {
+    val result = method match {
       case DiagnosticMethods.SingleJob =>
         SmallDiagnosticRunner.doSingleJobDiagnostic(
           data,
@@ -72,15 +72,6 @@ object ExperimentRunner {
           FIXED_SEED
           )
       case DiagnosticMethods.NestedSingleContextJob =>
-        SmallDiagnosticRunner.doNestedMultipleContextJobDiagnostic(
-            data,
-            RddUtils.mean,
-            StandardDeviationErrorQuantifier,
-            ErrorAnalysisConf.default,
-            sc,
-            parallelism,
-            FIXED_SEED)
-      case DiagnosticMethods.NestedMultipleContextJob =>
         SmallDiagnosticRunner.doNestedSingleContextJobDiagnostic(
             data,
             RddUtils.mean,
@@ -89,12 +80,23 @@ object ExperimentRunner {
             sc,
             parallelism,
             FIXED_SEED)
+      case DiagnosticMethods.NestedMultipleContextJob =>
+        SmallDiagnosticRunner.doNestedMultipleContextJobDiagnostic(
+            data,
+            RddUtils.mean,
+            StandardDeviationErrorQuantifier,
+            ErrorAnalysisConf.default,
+            sc,
+            parallelism,
+            FIXED_SEED)
     }
+    sc.stop()
+    result
   }
   
   def doBootstrapTest(master: String, parallelism: Int, numRows: Int, method: BootstrapMethod): ErrorQuantification = {
     val sc = new SparkContext(master, "bootstrapExperiment")
-    method match {
+    val result = method match {
       case BootstrapMethods.Broadcast =>
         val data = fetchLocalData(numRows, DATA_GENERATOR, FIXED_SEED)
         SmallBootstrapRunner.doBroadcastBootstrap(
@@ -131,6 +133,8 @@ object ExperimentRunner {
           FIXED_SEED
         )
     }
+    sc.stop()
+    result
   }
   
   trait BootstrapMethod
