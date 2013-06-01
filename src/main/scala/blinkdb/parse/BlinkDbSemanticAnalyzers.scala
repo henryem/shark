@@ -2,7 +2,6 @@ package blinkdb.parse
 
 import scala.collection.JavaConversions
 import org.apache.hadoop.hive.conf.HiveConf
-import shark.execution.CacheSinkOperator
 import shark.execution.HiveOperator
 import shark.execution.IntermediateCacheOperator
 import shark.execution.RddScanOperator
@@ -71,7 +70,7 @@ object BlinkDbSemanticAnalyzers {
    *           |
    * ( GroupByOperator   )
    *           |
-   * ( CacheSinkOperator )
+   * ( MemoryStoreSinkOperator )
    * 
    * In this example, this method will return a map from the SelectOperator to
    * a singleton list containing the GroupByOperator.

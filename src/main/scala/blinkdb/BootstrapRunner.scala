@@ -26,7 +26,7 @@ import shark.LogHelper
 import blinkdb.util.HiveUtils
 import blinkdb.util.CollectionUtils._
 import blinkdb.parse.InputExtractionSemanticAnalyzer
-import blinkdb.util.ResampleGenerator
+import edu.berkeley.blbspark.ResampleGenerator
 import akka.dispatch.Future
 import akka.dispatch.ExecutionContext
 import blinkdb.util.LoggingUtils
@@ -58,7 +58,7 @@ object BootstrapRunner extends LogHelper {
       QueryRunner.executeOperatorTree(semOpt.get)
     })
     queryCreationTimer.stop()
-    val bootstrapOutputsFuture = QueryRunner.collectQueryOutputs(resultRdds)
+    val bootstrapOutputsFuture = QueryRunner.collectQueryOutputs(resultRdds)(ec)
     bootstrapOutputsFuture.map(bootstrapOutputs => {
       errorQuantifier.computeError(bootstrapOutputs)
     })

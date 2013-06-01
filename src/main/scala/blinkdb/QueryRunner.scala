@@ -136,7 +136,7 @@ object QueryRunner extends LogHelper {
     val objectInspectorSerialized = KryoSerializer.serialize(objectInspector)
     val rawOutputsFuture = rdd
       .map(hiveRow => HiveUtils.toNumericRow(hiveRow, KryoSerializer.deserialize(objectInspectorSerialized)))
-      .collectFuture()
+      .collectFuture()(ec)
     rawOutputsFuture.map(rawOutputs => {
       val numRows = rawOutputs.size
       val numFields = if (numRows > 0) rawOutputs(0).size else 0

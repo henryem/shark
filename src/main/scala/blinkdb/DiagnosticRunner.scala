@@ -5,7 +5,7 @@ import shark.SharkEnv
 import blinkdb.util.CollectionUtils._
 import blinkdb.ErrorQuantifications._
 import shark.LogHelper
-import blinkdb.util.ResampleGenerator
+import edu.berkeley.blbspark.ResampleGenerator
 import shark.execution.RddCacheHelper
 import java.util.Random
 import akka.dispatch.ExecutionContext

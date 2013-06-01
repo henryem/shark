@@ -166,7 +166,6 @@ class SharkSemanticAnalyzer(conf: HiveConf) extends SemanticAnalyzer(conf) with 
     // Hive optimization.
     val hiveSinkOps = SharkSemanticAnalyzer.findAllHiveFileSinkOperators(
       pCtx.getTopOps().values().head)
-<<<<<<< HEAD
 
     // TODO: clean the following code. It's too messy to understand...
     val terminalOpSeq = {

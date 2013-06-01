@@ -60,15 +60,15 @@ object ErrorAnalysisRunner extends LogHelper {
       val executorService = Executors.newCachedThreadPool()
       implicit val ec = ExecutionContext.fromExecutorService(executorService)
       val bootstrapFuture = CollectionUtils.sequence(if (errorAnalysisConf.bootstrapConf.doBootstrap) {
-        Some(BootstrapRunner.doBootstrap(cmd, rdd, errorQuantifier, conf, errorAnalysisConf, random.nextInt))
+        Some(BootstrapRunner.doBootstrap(cmd, rdd, errorQuantifier, conf, errorAnalysisConf, random.nextInt)(ec))
       } else {
         None
-      })
+      })(ec)
       val diagnosticFuture = CollectionUtils.sequence(if (errorAnalysisConf.diagnosticConf.doDiagnostic) {
-        Some(DiagnosticRunner.doDiagnostic(cmd, rdd, inputSize, errorQuantifier, conf, errorAnalysisConf, random.nextInt))
+        Some(DiagnosticRunner.doDiagnostic(cmd, rdd, inputSize, errorQuantifier, conf, errorAnalysisConf, random.nextInt)(ec))
       } else {
         None
-      })
+      })(ec)
       val errorAnalysisFuture = bootstrapFuture.zip(diagnosticFuture).map({case (bootstrap, diagnostic) => ErrorAnalysis(bootstrap, diagnostic) })
       val analysisExecutionTimer = LoggingUtils.startCount("Waiting for analysis to execute in the cluster")
       val errorAnalysis = Await.result(errorAnalysisFuture, Duration.Inf)

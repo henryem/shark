@@ -5,11 +5,8 @@ import scala.collection.Iterator
 import scala.reflect.BeanProperty
 import org.apache.hadoop.hive.conf.HiveConf
 import shark.execution.serialization.OperatorSerializationWrapper
-import shark.memstore.ColumnBuilderCreateFunc
-import shark.memstore.ColumnarSerDe
-import shark.memstore.ColumnarStructObjectInspector
-import shark.memstore.RDDSerializer
-import shark.memstore.TableStorage
+import shark.memstore2.ColumnarSerDe
+import shark.memstore2.ColumnarStructObjectInspector
 import spark.storage.StorageLevel
 import spark.RDD
 import spark.SparkException
@@ -17,6 +14,9 @@ import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
 import blinkdb.execution.ColumnarObjectInspectingForwardOperator
+import shark.memstore2.TablePartition
+import shark.memstore2.TablePartitionBuilder
+import org.apache.hadoop.io.Writable
 
 /** 
  * Caches an RDD in the middle of an operator graph.  Currently this is
@@ -65,28 +65,37 @@ object IntermediateCacheOperator {
     
   private def serializeRdd(rdd: RDD[_], op: OperatorSerializationWrapper[IntermediateCacheOperator]): RDD[_] = {
     rdd.mapPartitionsWithIndex { case(split, iter) =>
-    op.initializeOnSlave()
+      op.initializeOnSlave()
+  
+      val serde = new ColumnarSerDe()
+      serde.objectInspector = ColumnarObjectInspectingForwardOperator.makeColumnarObjectInspector(
+          op.objectInspector.asInstanceOf[StructObjectInspector])
+      serde.initialize(op.hconf, new Properties())
+      
+      // Serialize each row into the builder object.
+      // ColumnarSerDe will return a TablePartitionBuilder.
+      var builder: Writable = null
+      iter.foreach { row =>
+        builder = serde.serialize(row.asInstanceOf[AnyRef], op.objectInspector)
+      }
 
-    val serde = new ColumnarSerDe(ColumnBuilderCreateFunc.uncompressedArrayFormat)
-    serde.objectInspector = ColumnarObjectInspectingForwardOperator.makeColumnarObjectInspector(
-        op.objectInspector.asInstanceOf[StructObjectInspector])
-        serde.initialize(op.hconf, new Properties())
-
-        val rddSerializier = new RDDSerializer(serde)
-    val singletonSerializedIterator = rddSerializier.serialize(iter, op.objectInspector)
-    singletonSerializedIterator
+      if (builder != null) {
+        Iterator(builder.asInstanceOf[TablePartitionBuilder].build)
+      } else {
+        // Empty partition.
+        Iterator(new TablePartition(0, Array()))
+      }
     }
   }
 
   private def deserializeRdd(rdd: RDD[_]): RDD[_] = {
-    val deserializedRdd = rdd.mapPartitions( iter => {
+    rdd.mapPartitions( iter => {
       if (iter.hasNext) {
-        iter.next.asInstanceOf[TableStorage].iterator
+        iter.next.asInstanceOf[TablePartition].iterator
       } else {
         Iterator()
       }
     })
-    deserializedRdd
   }
   
   class RddCacheHelperImpl(op: OperatorSerializationWrapper[IntermediateCacheOperator]) extends RddCacheHelper {
@@ -99,6 +108,7 @@ object IntermediateCacheOperator {
       // probably similar, though I am not quite sure why.
       val serializedRdd = serializeRdd(rdd, op)
       serializedRdd.persist(storageLevel)
+      //FIXME: Need to support "union RDD" functionality from Shark?
       deserializeRdd(serializedRdd)
     }
   }

@@ -2,7 +2,7 @@ package blinkdb.execution
 
 import org.apache.hadoop.hive.ql.exec.ForwardOperator
 import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector
-import shark.memstore.ColumnarStructObjectInspector
+import shark.memstore2.ColumnarStructObjectInspector
 import org.apache.hadoop.conf.Configuration
 
 /** A partner Hive Operator for any Operator that produces ColumnarStructs as outputs. */

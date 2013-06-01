@@ -1,7 +1,7 @@
 package blinkdb.experiment
 import blinkdb.ErrorQuantifier
 import spark.SparkContext
-import blinkdb.util.ResampleGenerator
+import edu.berkeley.blbspark.ResampleGenerator
 import blinkdb.DiagnosticOutput
 import blinkdb.util.LoggingUtils
 import org.apache.hadoop.io.NullWritable

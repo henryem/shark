@@ -24,7 +24,6 @@ import org.apache.hadoop.hive.ql.exec.{SelectOperator => HiveSelectOperator}
 import org.apache.hadoop.hive.ql.plan.SelectDesc
 import java.util.Arrays
 import scala.util.Random
-import shark.memstore.ColumnarStruct
 
 
 /**

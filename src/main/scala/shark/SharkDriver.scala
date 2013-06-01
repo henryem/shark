@@ -42,7 +42,7 @@ import edu.berkeley.blbspark.WeightedItem
 import edu.berkeley.blbspark.StratifiedBlb
 import org.apache.hadoop.hive.ql.processors.CommandProcessorResponse
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
-import shark.execution.RowWrapper
+import shark.api.Row
 import org.apache.hadoop.hive.serde2.objectinspector.StructObjectInspector
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector.Category
 import shark.execution.HiveOperator

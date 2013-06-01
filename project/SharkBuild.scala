@@ -17,7 +17,7 @@
 
 import sbt._
 import Keys._
-
+import com.typesafe.sbteclipse.plugin.EclipsePlugin.EclipseKeys
 
 object SharkBuild extends Build {
 
@@ -55,7 +55,8 @@ object SharkBuild extends Build {
       "Typesafe Repository" at "http://repo.typesafe.com/typesafe/releases/",
       "JBoss Repository" at "http://repository.jboss.org/nexus/content/repositories/releases/",
       "Spray Repository" at "http://repo.spray.cc/",
-      "Cloudera Repository" at "http://repository.cloudera.com/artifactory/cloudera-repos/"
+      "Cloudera Repository" at "http://repository.cloudera.com/artifactory/cloudera-repos/",
+      "Akka Repository" at "http://repo.akka.io/releases/"
     ),
 
     fork := true,
@@ -87,15 +88,20 @@ object SharkBuild extends Build {
     ),
 
     libraryDependencies ++= Seq(
-      "org.spark-project" %% "spark-core" % SPARK_VERSION,
-      "org.spark-project" %% "spark-repl" % SPARK_VERSION,
+      //"org.spark-project" %% "spark-core" % SPARK_VERSION,
+      //"org.spark-project" %% "spark-repl" % SPARK_VERSION,
+      "org.scala-lang" % "scala-compiler" % SCALA_VERSION,
+      "com.ning" % "compress-lzf" % "0.9.8",
+      "com.typesafe.akka" % "akka-actor" % "2.0.3",
       "com.google.guava" % "guava" % "11.0.1",
       "org.apache.hadoop" % "hadoop-core" % HADOOP_VERSION,
       "it.unimi.dsi" % "fastutil" % "6.4.2",
       "org.scalatest" %% "scalatest" % "1.9.1" % "test",
       "junit" % "junit" % "4.10" % "test",
       "com.novocode" % "junit-interface" % "0.8" % "test") ++
-      (if (TACHYON_ENABLED) Some("org.tachyonproject" % "tachyon" % "0.2.1") else None).toSeq
+      (if (TACHYON_ENABLED) Some("org.tachyonproject" % "tachyon" % "0.2.1") else None).toSeq,
 
+    // For the Eclipse build.  In OS X's Eclipse, relative paths don't work.
+    EclipseKeys.relativizeLibs := false
   )
 }
