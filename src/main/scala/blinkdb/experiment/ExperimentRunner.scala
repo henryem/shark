@@ -37,6 +37,7 @@ object ExperimentRunner {
     val test = testType match {
       case "singleJobDiagnostic" => doDiagnosticTest(master, parallelism, numRows, DiagnosticMethods.SingleJob)
       case "multipleJobDiagnostic" => doDiagnosticTest(master, parallelism, numRows, DiagnosticMethods.MultipleJob)
+      case "nestedJobDiagnostic" => doDiagnosticTest(master, parallelism, numRows, DiagnosticMethods.NestedJob)
       case "singleJobBootstrap" => doBootstrapTest(master, parallelism, numRows, BootstrapMethods.SingleJob)
       case "multipleJobBootstrap" => doBootstrapTest(master, parallelism, numRows, BootstrapMethods.MultipleJob)
       case "broadcastBootstrap" => doBootstrapTest(master, parallelism, numRows, BootstrapMethods.Broadcast)
@@ -69,6 +70,15 @@ object ExperimentRunner {
           parallelism,
           FIXED_SEED
           )
+      case DiagnosticMethods.NestedJob =>
+        SmallDiagnosticRunner.doNestedJobDiagnostic(
+            data,
+            RddUtils.mean,
+            StandardDeviationErrorQuantifier,
+            ErrorAnalysisConf.default,
+            sc,
+            parallelism,
+            FIXED_SEED)
     }
   }
   
@@ -124,5 +134,6 @@ object ExperimentRunner {
   object DiagnosticMethods {
     case object SingleJob extends DiagnosticMethod
     case object MultipleJob extends DiagnosticMethod
+    case object NestedJob extends DiagnosticMethod
   }
 }

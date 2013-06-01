@@ -12,8 +12,11 @@ import blinkdb.DiagnosticRunner
 import blinkdb.DiagnosticConf
 import spark.SparkContext._
 import spark.Partitioner
-import blinkdb.util.ResampleGenerator
 import blinkdb.util.RddUtils._
+import edu.berkeley.blbspark.ResampleGenerator
+import spark.LocalSpark
+import akka.dispatch.Await
+import akka.util.Duration
 
 object SmallDiagnosticRunner {
   def doSingleJobDiagnostic[D, E <: ErrorQuantification](
@@ -150,5 +153,29 @@ object SmallDiagnosticRunner {
     val diagnostic = DiagnosticRunner.computeFinalDiagnostic(diagnosticsPerSubsampleSize, diagnosticConf)
     diagnosticComputeTimer.stop
     diagnostic
+  }
+  
+  /** 
+   * As local diagnostic, but @queryFunc is allowed to take an RDD rather than
+   * a Seq.  This more closely simulates what BlinkDB will actually do, since
+   * it passes subsample datasets to Shark as RDDs.
+   */
+  def doNestedJobDiagnostic[D, E <: ErrorQuantification](
+      data: RDD[D],
+      queryFunc: RDD[D] => Double,
+      errorQuantifier: ErrorQuantifier[E],
+      errorAnalysisConf: ErrorAnalysisConf,
+      sc: SparkContext,
+      numSplits: Int,
+      seed: Int)
+      (implicit ev: ClassManifest[D]): DiagnosticOutput = {
+    doSingleJobDiagnostic(
+        data,
+        {dataSeq: Seq[D] => Await.result(LocalSpark.runLocally(dataSeq, queryFunc), Duration.Inf)},
+        errorQuantifier,
+        errorAnalysisConf,
+        sc,
+        numSplits,
+        seed)
   }
 }
