@@ -37,7 +37,8 @@ object ExperimentRunner {
     val test = testType match {
       case "singleJobDiagnostic" => doDiagnosticTest(master, parallelism, numRows, DiagnosticMethods.SingleJob)
       case "multipleJobDiagnostic" => doDiagnosticTest(master, parallelism, numRows, DiagnosticMethods.MultipleJob)
-      case "nestedJobDiagnostic" => doDiagnosticTest(master, parallelism, numRows, DiagnosticMethods.NestedJob)
+      case "nestedSingleContextJobDiagnostic" => doDiagnosticTest(master, parallelism, numRows, DiagnosticMethods.NestedSingleContextJob)
+      case "nestedMultipleContextJobDiagnostic" => doDiagnosticTest(master, parallelism, numRows, DiagnosticMethods.NestedMultipleContextJob)
       case "singleJobBootstrap" => doBootstrapTest(master, parallelism, numRows, BootstrapMethods.SingleJob)
       case "multipleJobBootstrap" => doBootstrapTest(master, parallelism, numRows, BootstrapMethods.MultipleJob)
       case "broadcastBootstrap" => doBootstrapTest(master, parallelism, numRows, BootstrapMethods.Broadcast)
@@ -70,8 +71,17 @@ object ExperimentRunner {
           parallelism,
           FIXED_SEED
           )
-      case DiagnosticMethods.NestedJob =>
-        SmallDiagnosticRunner.doNestedJobDiagnostic(
+      case DiagnosticMethods.NestedSingleContextJob =>
+        SmallDiagnosticRunner.doNestedMultipleContextJobDiagnostic(
+            data,
+            RddUtils.mean,
+            StandardDeviationErrorQuantifier,
+            ErrorAnalysisConf.default,
+            sc,
+            parallelism,
+            FIXED_SEED)
+      case DiagnosticMethods.NestedMultipleContextJob =>
+        SmallDiagnosticRunner.doNestedSingleContextJobDiagnostic(
             data,
             RddUtils.mean,
             StandardDeviationErrorQuantifier,
@@ -134,6 +144,7 @@ object ExperimentRunner {
   object DiagnosticMethods {
     case object SingleJob extends DiagnosticMethod
     case object MultipleJob extends DiagnosticMethod
-    case object NestedJob extends DiagnosticMethod
+    case object NestedSingleContextJob extends DiagnosticMethod
+    case object NestedMultipleContextJob extends DiagnosticMethod
   }
 }
