@@ -175,9 +175,11 @@ class SharkDriver(conf: HiveConf) extends Driver(conf) with LogHelper {
   }
   
   override def run(cmd: String): CommandProcessorResponse = {
+    println("Running query before error analysis.") //TMP
     val response = super.run(cmd)
+    println("Done running query.  Running error analysis.") //TMP
     val errorAnalysis = runErrorAnalysis(cmd).map(analysisMessage => "Error analysis: %s".format(analysisMessage))
-    println(errorAnalysis.getOrElse("No error analysis will be run for this query.")) //FIXME: Don't just print this here.
+    println(errorAnalysis.getOrElse("No error analysis will be run for this query.")) //TMP
     response
   }
   
