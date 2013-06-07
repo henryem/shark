@@ -170,6 +170,7 @@ class SharkSemanticAnalyzer(conf: HiveConf) extends SemanticAnalyzer(conf) with 
     // TODO: clean the following code. It's too messy to understand...
     val terminalOpSeq = {
       if (qb.getParseInfo.isInsertToTable && !qb.isCTAS) {
+        //TODO: Support INSERTs in BlinkDB?
         hiveSinkOps.map { hiveSinkOp =>
           val tableName = hiveSinkOp.asInstanceOf[HiveFileSinkOperator].getConf().getTableInfo()
             .getTableName()
@@ -204,24 +205,27 @@ class SharkSemanticAnalyzer(conf: HiveConf) extends SemanticAnalyzer(conf) with 
       } else if (hiveSinkOps.size == 1) {
         // For a single output, we have the option of choosing the output
         // destination (e.g. CTAS with table property "shark.cache" = "true").
-        Seq {
-          if (qb.isCTAS && qb.getTableDesc != null && CacheType.shouldCache(cacheMode)) {
-            val storageLevel = MemoryMetadataManager.getStorageLevelFromString(
-              qb.getTableDesc().getTblProps.get("shark.cache.storageLevel"))
-            qb.getTableDesc().getTblProps().put(CachedTableRecovery.QUERY_STRING, ctx.getCmd())
-            OperatorFactory.createSharkMemoryStoreOutputPlan(
-              hiveSinkOps.head,
-              qb.getTableDesc.getTableName,
-              storageLevel,
-              _resSchema.size,                // numColumns
-              cacheMode == CacheType.tachyon, // use tachyon
-              false)
-          } else if (pctx.getContext().asInstanceOf[QueryContext].useTableRddSink) {
-            OperatorFactory.createSharkRddOutputPlan(hiveSinkOps.head)
-          } else {
-            OperatorFactory.createSharkFileOutputPlan(hiveSinkOps.head)
-          }
-        }
+        val terminalOpSingleton = createOutputPlan(hiveSinkOps.head)
+          .map(op => Seq(op))
+          .getOrElse(Seq {
+            if (qb.isCTAS && qb.getTableDesc != null && CacheType.shouldCache(cacheMode)) {
+              val storageLevel = MemoryMetadataManager.getStorageLevelFromString(
+                qb.getTableDesc().getTblProps.get("shark.cache.storageLevel"))
+              qb.getTableDesc().getTblProps().put(CachedTableRecovery.QUERY_STRING, ctx.getCmd())
+              OperatorFactory.createSharkMemoryStoreOutputPlan(
+                hiveSinkOps.head,
+                qb.getTableDesc.getTableName,
+                storageLevel,
+                _resSchema.size,                // numColumns
+                cacheMode == CacheType.tachyon, // use tachyon
+                false)
+            } else if (pctx.getContext().asInstanceOf[QueryContext].useTableRddSink) {
+              OperatorFactory.createSharkRddOutputPlan(hiveSinkOps.head)
+            } else {
+              OperatorFactory.createSharkFileOutputPlan(hiveSinkOps.head)
+            }
+          })
+        executePostAnalysisHooks(terminalOpSingleton)
 
         // A hack for the query plan dashboard to get the query plan. This was
         // done for SIGMOD demo. Turn it off by default.
@@ -229,6 +233,7 @@ class SharkSemanticAnalyzer(conf: HiveConf) extends SemanticAnalyzer(conf) with 
 
       } else {
         // For non-INSERT commands, if there are multiple file outputs, we always use file outputs.
+        //TODO: Support this in BlinkDB?
         hiveSinkOps.map(OperatorFactory.createSharkFileOutputPlan(_))
       }
     }
