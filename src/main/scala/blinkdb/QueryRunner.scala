@@ -70,7 +70,8 @@ case class IndependentQueryExecutionBuilder(
 case class IndependentQueryExecution(cmd: String, stage: ErrorAnalysisStage, conf: HiveConf)
     extends QueryExecution {
   override def execute(inputRdd: RDD[Any])(implicit ec: ExecutionContext): Future[SingleQueryIterateOutput] = {
-    QueryExecutionSynchronizer.synchronized {
+    QueryExecutionLock.synchronized {
+      println("Executing a single query in IndependentQueryExecution.")
       //HACK: Hive requires some thread-local state to be initialized.
       //TODO: This might require all of this work to be done in a separate
       // thread.
@@ -84,7 +85,13 @@ case class IndependentQueryExecution(cmd: String, stage: ErrorAnalysisStage, con
   }
 }
 
-object QueryExecutionSynchronizer
+//HACK: Shark (really, Hive) does not support multiple concurrent queries.
+// Fortunately we can "execute" a Shark query and get back a lazy RDD containing
+// its result, then collect all such RDDs in parallel.  But the local execution
+// (e.g. building the operator graph) must be done sequentially.  This is
+// enforced in BlinkDB by convention: You must synchronize on this object
+// when performing semantic analysis or executing a query.
+object QueryExecutionLock
 
 case class SharedOperatorTreeQueryExecutionBuilder(
     @Nullable private val stage: ErrorAnalysisStage,
