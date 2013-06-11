@@ -24,25 +24,89 @@ import blinkdb.util.FutureRddOps._
 import akka.dispatch.ExecutionContext
 import org.apache.hadoop.hive.ql.parse.SemanticException
 import blinkdb.parse.BootstrapSemanticAnalyzer
+import akka.dispatch.Await
+import akka.util.Duration
+import javax.annotation.Nullable
+import shark.execution.serialization.SerializableWritable
+import org.apache.hadoop.hive.ql.session.SessionState
 
-//TODO: Use this in BootstrapRunner etc to abstract away query execution rather than using QueryRunner methods.
-trait QueryExecution {
-  def collect(implicit ec: ExecutionContext): Future[SingleQueryIterateOutput]
+trait QueryExecutionBuilder[B <: QueryExecutionBuilder[B]] extends Serializable {
+  def forStage(errorAnalysisStage: ErrorAnalysisStage): B
+  def build(): QueryExecution
 }
 
-class IndependentQueryExecution(cmd: String, stage: ErrorAnalysisStage, conf: HiveConf, inputRdd: Option[RDD[Any]])
+//TODO: Document.
+//NOTE: Implementations are generally not serializable.  Use a
+// QueryExecutionBuilder to store and move around common data for query
+// execution, then build a QueryExecution immediately before you use it.
+trait QueryExecution {
+  def execute(inputRdd: RDD[Any])(implicit ec: ExecutionContext): Future[SingleQueryIterateOutput]
+  
+  //TODO: This is a little inefficient.
+  def executeNow(inputRdd: RDD[Any])(implicit ec: ExecutionContext): SingleQueryIterateOutput
+    = Await.result(execute(inputRdd)(ec), Duration.Inf)
+}
+
+case class IndependentQueryExecutionBuilder(
+    @Nullable private val stage: ErrorAnalysisStage,
+    @Nullable private val cmd: String,
+    @Nullable private val conf: SerializableWritable[HiveConf])
+    extends QueryExecutionBuilder[IndependentQueryExecutionBuilder] {
+  def this() = this(null, null, null)
+  
+  override def forStage(newStage: ErrorAnalysisStage): IndependentQueryExecutionBuilder = {
+    new IndependentQueryExecutionBuilder(newStage, this.cmd, this.conf)
+  }
+  def forCmd(newCmd: String): IndependentQueryExecutionBuilder = {
+    new IndependentQueryExecutionBuilder(this.stage, newCmd, this.conf)
+  }
+  def withConf(newConf: HiveConf): IndependentQueryExecutionBuilder = {
+    new IndependentQueryExecutionBuilder(this.stage, this.cmd, new SerializableWritable(newConf))
+  }
+  
+  override def build(): QueryExecution = new IndependentQueryExecution(cmd, stage, conf.t)
+}
+
+case class IndependentQueryExecution(cmd: String, stage: ErrorAnalysisStage, conf: HiveConf)
     extends QueryExecution {
-  override def collect(implicit ec: ExecutionContext): Future[SingleQueryIterateOutput] = {
-    val sem = QueryRunner.doSemanticAnalysis(cmd, stage, conf, inputRdd)
-    require(sem.isDefined) //FIXME
-    val (output, oi) = QueryRunner.executeOperatorTree(sem.get)
-    QueryRunner.collectSingleQueryOutput(output, oi)
+  override def execute(inputRdd: RDD[Any])(implicit ec: ExecutionContext): Future[SingleQueryIterateOutput] = {
+    QueryExecutionSynchronizer.synchronized {
+      //HACK: Hive requires some thread-local state to be initialized.
+      //TODO: This might require all of this work to be done in a separate
+      // thread.
+      SessionState.start(conf)
+      
+      val sem = QueryRunner.doSemanticAnalysis(cmd, stage, conf, Some(inputRdd))
+      require(sem.isDefined) //FIXME
+      val (output, oi) = QueryRunner.executeOperatorTree(sem.get)
+      QueryRunner.collectSingleQueryOutput(output, oi)
+    }
   }
 }
 
-class SharedOperatorTreeQueryExecution(sem: BootstrapSemanticAnalyzer, inputRdd: RDD[Any])
+object QueryExecutionSynchronizer
+
+case class SharedOperatorTreeQueryExecutionBuilder(
+    @Nullable private val stage: ErrorAnalysisStage,
+    @Nullable private val sem: BootstrapSemanticAnalyzer)
+    extends QueryExecutionBuilder[SharedOperatorTreeQueryExecutionBuilder] {
+  def this() = this(null, null)
+  
+  override def forStage(newStage: ErrorAnalysisStage): SharedOperatorTreeQueryExecutionBuilder = {
+    new SharedOperatorTreeQueryExecutionBuilder(newStage, this.sem)
+  }
+  def withAnalyzer(newSem: BootstrapSemanticAnalyzer): SharedOperatorTreeQueryExecutionBuilder = {
+    new SharedOperatorTreeQueryExecutionBuilder(this.stage, newSem)
+  }
+  
+  override def build(): QueryExecution = new SharedOperatorTreeQueryExecution(sem)
+}
+
+//NOTE: This is currently broken.  Also, SemanticAnalyzer is not likely to be
+// serializable.
+case class SharedOperatorTreeQueryExecution(sem: BootstrapSemanticAnalyzer)
     extends QueryExecution {
-  override def collect(implicit ec: ExecutionContext): Future[SingleQueryIterateOutput] = {
+  override def execute(inputRdd: RDD[Any])(implicit ec: ExecutionContext): Future[SingleQueryIterateOutput] = {
 //    sem.setInputRdd(inputRdd) //FIXME: Add this API to BootstrapSemanticAnalyzer.
     val (output, oi) = QueryRunner.executeOperatorTree(sem)
     QueryRunner.collectSingleQueryOutput(output, oi)
@@ -50,7 +114,6 @@ class SharedOperatorTreeQueryExecution(sem: BootstrapSemanticAnalyzer, inputRdd:
 }
 
 object QueryRunner extends LogHelper {
-
   def logOperatorTree(sem: BaseSemanticAnalyzer): Unit = {
     if (!log.isDebugEnabled()) {
       return

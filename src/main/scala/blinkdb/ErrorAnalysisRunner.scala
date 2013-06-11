@@ -48,24 +48,23 @@ object ErrorAnalysisRunner extends LogHelper {
       //     input.
       // This is not included in analysis time, since eventually this operation
       // should be performed for free as part of executing the original query.
+      println("Finished selecting input.  Starting error analysis.") //TMP
       val inputCachingTimer = LoggingUtils.startCount("Caching input from the original query")
       val inputSize = rdd.count
       inputCachingTimer.stop()
       logInfo("Running analysis on a dataset of %d rows.".format(inputSize))
       val analysisTimer = LoggingUtils.startCount("Running error analysis")
       val random = new Random(123) //FIXME
-      //TODO: May need to tune the thread pool.  This thread pool is mostly
-      // going to be waiting on I/O, so we want to allow as many as can be
-      // used.  The number of threads used may be on the order of 20,000.
       val executorService = Executors.newCachedThreadPool()
       implicit val ec = ExecutionContext.fromExecutorService(executorService)
+      val queryBuilder = new IndependentQueryExecutionBuilder().forCmd(cmd).withConf(conf)
       val bootstrapFuture = CollectionUtils.sequence(if (errorAnalysisConf.bootstrapConf.doBootstrap) {
-        Some(BootstrapRunner.doBootstrap(cmd, rdd, errorQuantifier, conf, errorAnalysisConf, random.nextInt)(ec))
+        Some(BootstrapRunner.doBootstrap(queryBuilder, rdd, errorQuantifier, errorAnalysisConf.bootstrapConf, random.nextInt)(ec))
       } else {
         None
       })(ec)
       val diagnosticFuture = CollectionUtils.sequence(if (errorAnalysisConf.diagnosticConf.doDiagnostic) {
-        Some(DiagnosticRunner.doDiagnostic(cmd, rdd, inputSize, errorQuantifier, conf, errorAnalysisConf, random.nextInt)(ec))
+        Some(DiagnosticRunner.doDiagnostic(queryBuilder, rdd, inputSize, errorQuantifier, errorAnalysisConf, random.nextInt)(ec))
       } else {
         None
       })(ec)

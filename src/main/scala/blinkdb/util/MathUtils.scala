@@ -1,6 +1,8 @@
 package blinkdb.util
 
 import java.util.Random
+import cern.jet.random.Normal
+import cern.jet.random.engine.DRand
 
 object MathUtils {
   def quantile[I](quantile: Double)(data: Seq[I])(implicit ord: Ordering[I]): I = {
@@ -27,5 +29,56 @@ object MathUtils {
       require(smallerSize + tiedSize >= rank)
       pivot
     }
+  }
+  
+  /** 
+   * Divide @numThings evenly among @numBuckets, with ties going to earlier
+   * buckets.  For example, divideAmong(5, 3) returns the sequence (2, 2, 1).
+   */
+  def divideAmong(numThings: Int, numBuckets: Int): Seq[Int] = {
+    (0 until numBuckets)
+      .map(bucketIdx => {
+        (numThings + numBuckets - bucketIdx - 1) / numBuckets
+      })
+  }
+  
+  /** 
+   * The number of net rank concordances between @a and @b, i.e. the number
+   * of (i,j) pairs such that !((a(i) > a(j)) ^ (b(i) > b(j))).  This is useful
+   * in Kendall's test for independence. 
+   */
+  def netConcordances[T <% Ordered[T], U <% Ordered[U]](a: Seq[T], b: Seq[U]): Int = {
+    val n = a.size
+    require(b.size == n)
+    require(n > 1)
+    (1 to n-1).map(i => (0 to i-1).map(j => a(i).compareTo(a(j)) * b(i).compareTo(b(j))).sum).sum
+  }
+  
+  /**
+   * Returns true if the probability that a Normal(nullMean, nullVariance)
+   * distribution generates an observation at least as extreme as @realization
+   * is less than 1-@confidenceLevel.  VERY roughly, this means that the null
+   * hypothesis that @realization came from a Normal(nullMean, nulLVariance)
+   * distribution is probably not true.
+   */
+  def twoSidedNormalTest(realization: Double, nullMean: Double, nullVariance: Double, confidenceLevel: Double): Boolean = {
+    val normal = new Normal(nullMean, math.sqrt(nullVariance), new DRand(0))
+    val cdfVal = normal.cdf(realization)
+    val singleTailRejectionRegion = (1 - confidenceLevel) / 2
+    cdfVal < singleTailRejectionRegion || 1 - singleTailRejectionRegion < cdfVal
+  }
+  
+  /**
+   * Returns true if the probability that two random, independent ordered
+   * sequences @a and @b would have at least as much rank correlation as @a
+   * and @b is below 1-@confidenceLevel.  Roughly, if this returns true, then
+   * the pairs @a(i) and @b(i) are probably dependent.
+   */
+  def kendallTauTest[T <% Ordered[T], U <% Ordered[U]](a: Seq[T], b: Seq[U], confidenceLevel: Double): Boolean = {
+    require(0 <= confidenceLevel && confidenceLevel <= 1)
+    val numNetConcordances = netConcordances(a, b)
+    val n = a.size
+    val kendallTau = numNetConcordances.toDouble / (n*(n-1)/2)
+    twoSidedNormalTest(kendallTau, 0, (4*n+10).toDouble/(9*n*n-9*n), confidenceLevel)
   }
 }

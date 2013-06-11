@@ -30,37 +30,29 @@ import edu.berkeley.blbspark.ResampleGenerator
 import akka.dispatch.Future
 import akka.dispatch.ExecutionContext
 import blinkdb.util.LoggingUtils
+import akka.dispatch.Futures
 
 object BootstrapRunner extends LogHelper {
-  def doBootstrap[E <: ErrorQuantification](
-      cmd: String,
+  def doBootstrap[E <: ErrorQuantification, B <: QueryExecutionBuilder[B]](
+      queryBuilder: B,
       inputRdd: RDD[Any],
       errorQuantifier: ErrorQuantifier[E],
-      conf: HiveConf,
-      errorAnalysisConf: ErrorAnalysisConf,
+      bootstrapConf: BootstrapConf,
       seed: Int)
       (implicit ec: ExecutionContext):
       Future[Seq[Seq[E]]] = {
     val resampleTimer = LoggingUtils.startCount("Creating resample input RDDs")
-    val resampleRdds = ResampleGenerator.generateResamples(inputRdd, errorAnalysisConf.bootstrapConf.numBootstrapResamples, seed)
+    val resampleRdds = ResampleGenerator.generateResamples(inputRdd, bootstrapConf.numBootstrapResamples, seed)
     resampleTimer.stop()
     //NOTE: The validity of this timing number relies on resampleRdds being an
     // eager collection.  There is no point in it being lazy, so this isn't a
     // big deal.
+    val query = queryBuilder.forStage(ErrorAnalysisStage.BootstrapExecution).build()
     val queryCreationTimer = LoggingUtils.startCount("Creating resample queries and forming output RDDs")
-    val resultRdds = resampleRdds.map({ resampleRdd => 
-      //TODO: Reuse semantic analysis across runs.  For now this avoids the
-      // hassle of reaching into the graph and replacing the resample RDD,
-      // and it also avoids any bugs that might result from executing an
-      // operator graph more than once.
-      val semOpt = QueryRunner.doSemanticAnalysis(cmd, ErrorAnalysisStage.BootstrapExecution, conf, Some(resampleRdd))
-      require(semOpt.isDefined) //FIXME
-      QueryRunner.executeOperatorTree(semOpt.get)
-    })
+    val resampleOutputsFuture = Futures.sequence(resampleRdds.map({ resampleRdd => query.execute(resampleRdd)(ec) }), ec)
     queryCreationTimer.stop()
-    val bootstrapOutputsFuture = QueryRunner.collectQueryOutputs(resultRdds)(ec)
-    bootstrapOutputsFuture.map(bootstrapOutputs => {
-      errorQuantifier.computeError(bootstrapOutputs)
+    resampleOutputsFuture.map(resampleOutputs => {
+      errorQuantifier.computeError(resampleOutputs.toSeq)
     })
   }
 }

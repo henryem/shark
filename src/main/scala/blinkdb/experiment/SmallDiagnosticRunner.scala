@@ -21,6 +21,7 @@ import akka.dispatch.Future
 import akka.dispatch.ExecutionContext
 import java.util.concurrent.Executors
 import spark.SparkEnv
+import blinkdb.util.RddUtils
 
 object SmallDiagnosticRunner {
   def doSingleJobDiagnostic[D, E <: ErrorQuantification](
@@ -35,22 +36,13 @@ object SmallDiagnosticRunner {
     val loadTimer = LoggingUtils.startCount("Loading the data")
     //FIXME: Not sure what kind of input we should use.
     val random = new Random(seed)
-    val repartitioningSeed = random.nextInt
-    val permutedData = data
-      .mapPartitionsWithIndex((partitionIdx, partition) => {
-        val partitionRandom = new Random(seed + partitionIdx)
-        partition.map(item => (partitionRandom.nextInt % numSplits, item))
-      })
-      .partitionBy(Partitioner.defaultPartitioner(data))
-      .persist()
-    val dataSize = data.count
+    val permutedData = RddUtils.randomlyPermute(data, random.nextInt)
     loadTimer.stop
     require(errorAnalysisConf.diagnosticConf.numDiagnosticSubsamples % numSplits == 0) //FIXME
     val diagnosticCollectTimer = LoggingUtils.startCount("Computing and collecting subsample results")
     val partitionToSubsampleSizes = {split: Int => (0 until errorAnalysisConf.diagnosticConf.numDiagnosticSubsamples / numSplits)
       .flatMap(subsampleIdx => (0 until errorAnalysisConf.diagnosticConf.diagnosticSubsampleSizes.size).map(errorAnalysisConf.diagnosticConf.diagnosticSubsampleSizes))}
     val intermediateDiagnosticResults: Seq[(Int, (Double, E))] = permutedData
-      .map(_._2)
       .mapPartitionsWithIndex((partitionIdx, partition) => {
         val random = new Random(seed + partitionIdx)
         val subsampleSizes = partitionToSubsampleSizes(partitionIdx)
@@ -101,16 +93,8 @@ object SmallDiagnosticRunner {
       (implicit ev: ClassManifest[D]): DiagnosticOutput = {
     val loadTimer = LoggingUtils.startCount("Loading the data")
     val random = new Random(seed)
-    val repartitioningSeed = random.nextInt
-    val permutedData = data
-      .mapPartitionsWithIndex((partitionIdx, partition) => {
-        val partitionRandom = new Random(seed + partitionIdx)
-        partition.map(item => (partitionRandom.nextInt % numSplits, item))
-      })
-      .partitionBy(Partitioner.defaultPartitioner(data))
-      .map(_._2)
-      .persist()
-    val partitionSizes = data
+    val permutedData = RddUtils.randomlyPermute(data, random.nextInt).persist()
+    val partitionSizes = permutedData
       .mapPartitionsWithIndex({(partitionIdx, partition) => Iterator((partitionIdx, partition.size))})
       .collectAsMap
     val singlePartitionRdds = (0 until permutedData.partitions.size)
@@ -202,22 +186,13 @@ object SmallDiagnosticRunner {
     val loadTimer = LoggingUtils.startCount("Loading the data")
     //FIXME: Not sure what kind of input we should use.
     val random = new Random(seed)
-    val repartitioningSeed = random.nextInt
-    val permutedData = data
-      .mapPartitionsWithIndex((partitionIdx, partition) => {
-        val partitionRandom = new Random(seed + partitionIdx)
-        partition.map(item => (partitionRandom.nextInt % numSplits, item))
-      })
-      .partitionBy(Partitioner.defaultPartitioner(data))
-      .persist()
-    val dataSize = data.count
+    val permutedData = RddUtils.randomlyPermute(data, random.nextInt)
     loadTimer.stop
     require(errorAnalysisConf.diagnosticConf.numDiagnosticSubsamples % numSplits == 0) //FIXME
     val diagnosticCollectTimer = LoggingUtils.startCount("Computing and collecting subsample results")
     val partitionToSubsampleSizes = {split: Int => (0 until errorAnalysisConf.diagnosticConf.numDiagnosticSubsamples / numSplits)
       .flatMap(subsampleIdx => (0 until errorAnalysisConf.diagnosticConf.diagnosticSubsampleSizes.size).map(errorAnalysisConf.diagnosticConf.diagnosticSubsampleSizes))}
     val intermediateDiagnosticResults: Seq[(Int, (Double, E))] = permutedData
-      .map(_._2)
       .mapPartitionsWithIndex((partitionIdx, partition) => {
         val random = new Random(seed + partitionIdx)
         val subsampleSizes = partitionToSubsampleSizes(partitionIdx)

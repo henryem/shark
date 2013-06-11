@@ -11,6 +11,17 @@ import java.util.Random
 import akka.dispatch.ExecutionContext
 import akka.dispatch.Future
 import edu.berkeley.blbspark.util.Statistics
+import spark.SparkContext._
+import spark.Partitioner
+import blinkdb.util.RddUtils
+import blinkdb.util.FutureRddOps._
+import java.util.concurrent.Executors
+import akka.dispatch.Await
+import spark.LocalSpark
+import akka.util.Duration
+import akka.dispatch.Futures
+import blinkdb.util.MathUtils
+import blinkdb.util.LoggingUtils
 
 object DiagnosticRunner extends LogHelper {
   private val NUM_DIAGNOSTIC_SUBSAMPLES = 10 //TODO: 100?
@@ -38,45 +49,79 @@ object DiagnosticRunner extends LogHelper {
   /**
    * @param inputRdd must be cached.
    */
-  def doDiagnostic[E <: ErrorQuantification](
-      cmd: String,
+  def doDiagnostic[E <: ErrorQuantification, B <: QueryExecutionBuilder[B]](
+      queryBuilder: B,
       inputRdd: RDD[Any],
       inputRddSize: Long,
       errorQuantifier: ErrorQuantifier[E],
-      conf: HiveConf,
       errorAnalysisConf: ErrorAnalysisConf,
       seed: Int)
       (implicit ec: ExecutionContext):
       Future[DiagnosticOutput] = {
-    val random = new Random(seed)
     val diagnosticConf = errorAnalysisConf.diagnosticConf
-    //TODO: This is a little hard to read.
-    val resultsPerSubsampleSizeFuture: Future[Seq[SingleDiagnosticResult]] = Future.sequence(diagnosticConf.diagnosticSubsampleSizes.map({ subsampleSize =>
-      val subsampleRdds = ResampleGenerator.generateSubsamples(inputRdd, diagnosticConf.numDiagnosticSubsamples, subsampleSize, inputRddSize, random.nextInt)
-      val resultRddsAndBootstrapOutputs = subsampleRdds.map({ subsampleRdd =>
-        //TODO: Reuse semantic analysis across runs.  For now this avoids the
-        // hassle of reaching into the graph and replacing the resample RDD,
-        // and it also avoids any bugs that might result from executing an
-        // operator graph more than once.
-        val semOpt = QueryRunner.doSemanticAnalysis(cmd, ErrorAnalysisStage.DiagnosticExecution, conf, Some(subsampleRdd))
-        require(semOpt.isDefined) //FIXME
-        val sem = semOpt.get
-        //TODO: Restrict Shark to use only a single partition for this subsample.
-        val (trueQueryOutputRdd, objectInspector) = QueryRunner.executeOperatorTree(sem)
-        val trueQueryOutputFuture = QueryRunner.collectSingleQueryOutput(trueQueryOutputRdd, objectInspector)
-        val bootstrapOutputFuture = BootstrapRunner.doBootstrap(cmd, subsampleRdd, errorQuantifier, conf, errorAnalysisConf, random.nextInt)
-        (trueQueryOutputFuture, bootstrapOutputFuture)
+    val parallelism = inputRdd.partitions.size
+    
+//    println("Shuffling input.") //TMP
+//    val preshuffleTimer = LoggingUtils.startCount("Shuffling input as a precursor to diagnosis.")
+//    //TODO: This is expensive.  We can instead shuffle only a part of the
+//    // input (since only diagnosticSubsampleSizes.sum*numDiagnosticSubsamples
+//    // rows are actually needed), or else assume that it has been shuffled
+//    // ahead of time.
+//    val shuffledInputRdd = RddUtils.randomlyPermute(inputRdd, new Random(seed).nextInt).persist()
+//    shuffledInputRdd.foreach(_ => Unit) //TMP
+//    preshuffleTimer.stop()
+//    println("Done shuffling input.  Some rows: %s".format(shuffledInputRdd.take(15).deep.toString))
+    val shuffledInputRdd = inputRdd //TMP
+    
+    //TODO: Divide subsamples of different sizes, to allow for parallelism up
+    // to numDiagnosticSubsamples*diagnosticSubsampleSizes.size.
+    val partitionToSubsampleSizes: Int => Seq[Int] = MathUtils.divideAmong(diagnosticConf.numDiagnosticSubsamples, parallelism)
+      .map(numSubsamples => Seq.fill(numSubsamples)(diagnosticConf.diagnosticSubsampleSizes).flatten)
+    val diagnosticResultsFuture: Future[Seq[(Int, (SingleQueryIterateOutput, Seq[Seq[E]]))]] = shuffledInputRdd
+      .mapPartitionsWithIndex((partitionIdx, partition) => {
+        println("Computing diagnostic on partition %d".format(partitionIdx)) //TMP
+        val random = new Random(seed + partitionIdx)
+        val subsampleSizes = partitionToSubsampleSizes(partitionIdx)
+        val query = queryBuilder.forStage(ErrorAnalysisStage.DiagnosticExecution).build()
+        val subsampleResults: Seq[(Int, (SingleQueryIterateOutput, Seq[Seq[E]]))] = Await.result(
+          LocalSpark.runInLocalContext({sc =>
+            subsampleSizes.map(subsampleSize => {
+              val executor = Executors.newSingleThreadExecutor()
+              val ec = ExecutionContext.fromExecutor(executor)
+              val subsample = partition.take(subsampleSize).toSeq
+              val queryOutput = query.executeNow(LocalSpark.createLocalRdd(subsample, sc))(ec)
+              //TODO: Use BootstrapRunner here instead.
+              val bootstrapResamples = (0 until errorAnalysisConf.bootstrapConf.numBootstrapResamples)
+                .map(idx => ResampleGenerator.generateLocalResample(subsample, random.nextInt, true))
+                .map(resample => query.executeNow(LocalSpark.createLocalRdd(resample, sc))(ec))
+              val bootstrapResult = errorQuantifier.computeError(bootstrapResamples)
+              (subsampleSize, (queryOutput, bootstrapResult))
+            })
+          }),
+          Duration.Inf)
+        subsampleResults.iterator
       })
-      val subsamplingOutputsFuture = Future.sequence(resultRddsAndBootstrapOutputs.map(_._1))
-      val groundTruthFuture = subsamplingOutputsFuture.map(subsamplingOutputs => errorQuantifier.computeError(subsamplingOutputs))
-      val subsamplingBootstrapOutputsFuture = Future.sequence(resultRddsAndBootstrapOutputs.map(_._2))
-      groundTruthFuture
-        .zip(subsamplingBootstrapOutputsFuture)
-        .map({case (groundTruth, subsamplingBootstrapOutputs) => 
-          computeSingleDiagnosticResult(subsampleSize, groundTruth, subsamplingBootstrapOutputs, diagnosticConf)
+      .collectFuture
+      .map(_.toSeq)
+    
+    println("Done producing futures.") //TMP
+    // Once all diagnostic results for individual subsamples are in, group by
+    // subsample size and decide whether the diagnostic passes.
+    diagnosticResultsFuture.map(diagnosticResults => {
+      println("Examining diagnostic results locally.") //TMP
+      val resultsBySubsampleSize: Map[Int, Seq[(SingleQueryIterateOutput, Seq[Seq[E]])]] = diagnosticResults
+        .groupBy(_._1)
+        .mapValues(_.map(_._2))
+      val diagnosticsPerSubsampleSize = resultsBySubsampleSize
+        .map({ case (subsampleSize, results) =>
+          val queryOutputs = results.map(_._1)
+          val groundTruthEstimate = errorQuantifier.computeError(queryOutputs)
+          val bootstrapOutputs = results.map(_._2)
+          DiagnosticRunner.computeSingleDiagnosticResult(subsampleSize, groundTruthEstimate, bootstrapOutputs, diagnosticConf)
         })
-    }))
-    resultsPerSubsampleSizeFuture.map(resultsPerSubsampleSize => computeFinalDiagnostic(resultsPerSubsampleSize, diagnosticConf))
+        .toSeq
+      DiagnosticRunner.computeFinalDiagnostic(diagnosticsPerSubsampleSize, diagnosticConf)
+    })
   }
   
   def computeSingleDiagnosticResult[E <: ErrorQuantification](subsampleSize: Int, groundTruth: Seq[Seq[E]], bootstrapOutputs: Seq[Seq[Seq[E]]], diagnosticConf: DiagnosticConf): SingleDiagnosticResult = {
