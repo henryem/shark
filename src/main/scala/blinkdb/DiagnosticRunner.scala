@@ -85,7 +85,9 @@ object DiagnosticRunner extends LogHelper {
         val query = queryBuilder.forStage(ErrorAnalysisStage.DiagnosticExecution).build()
         val subsampleResults: Seq[(Int, (SingleQueryIterateOutput, Seq[Seq[E]]))] = Await.result(
           LocalSpark.runInLocalContext({sc =>
+            println("Running in local context") //TMP
             subsampleSizes.map(subsampleSize => {
+              println("Computing diagnostic subsample of size %d".format(subsampleSize)) //TMP
               val executor = Executors.newSingleThreadExecutor()
               val ec = ExecutionContext.fromExecutor(executor)
               val subsample = partition.take(subsampleSize).toSeq
