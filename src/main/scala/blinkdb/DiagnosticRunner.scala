@@ -67,7 +67,7 @@ object DiagnosticRunner extends LogHelper {
     // input (since only diagnosticSubsampleSizes.sum*numDiagnosticSubsamples
     // rows are actually needed), or else assume that it has been shuffled
     // ahead of time.
-    val shuffledInputRdd = RddUtils.randomlyPermute(inputRdd, new Random(seed).nextInt).persist()
+    val shuffledInputRdd = RddUtils.randomlyPermute(inputRdd, new Random(seed).nextInt)
     shuffledInputRdd.foreach(_ => Unit) //TMP
     preshuffleTimer.stop()
     println("Done shuffling input.  Some rows: %s".format(shuffledInputRdd.take(15).deep.toString))
