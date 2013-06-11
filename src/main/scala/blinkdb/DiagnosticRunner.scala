@@ -75,6 +75,7 @@ object DiagnosticRunner extends LogHelper {
     
     //TODO: Divide subsamples of different sizes, to allow for parallelism up
     // to numDiagnosticSubsamples*diagnosticSubsampleSizes.size.
+    println("Parallelism: %d".format(parallelism)) //TMP
     val partitionToSubsampleSizes: Int => Seq[Int] = MathUtils.divideAmong(diagnosticConf.numDiagnosticSubsamples, parallelism)
       .map(numSubsamples => Seq.fill(numSubsamples)(diagnosticConf.diagnosticSubsampleSizes).flatten)
     val diagnosticResultsFuture: Future[Seq[(Int, (SingleQueryIterateOutput, Seq[Seq[E]]))]] = shuffledInputRdd
