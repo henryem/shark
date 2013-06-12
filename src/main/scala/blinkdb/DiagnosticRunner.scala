@@ -61,16 +61,17 @@ object DiagnosticRunner extends LogHelper {
     val diagnosticConf = errorAnalysisConf.diagnosticConf
     val parallelism = inputRdd.partitions.size
     
-    println("Shuffling input.") //TMP
-    val preshuffleTimer = LoggingUtils.startCount("Shuffling input as a precursor to diagnosis.")
-    //TODO: This is expensive.  We can instead shuffle only a part of the
-    // input (since only diagnosticSubsampleSizes.sum*numDiagnosticSubsamples
-    // rows are actually needed), or else assume that it has been shuffled
-    // ahead of time.
-    val shuffledInputRdd = RddUtils.randomlyPermute(inputRdd, new Random(seed).nextInt)
-    shuffledInputRdd.foreach(_ => Unit) //TMP
-    preshuffleTimer.stop()
-    println("Done shuffling input.  Some rows: %s".format(shuffledInputRdd.take(15).deep.toString))
+//    println("Shuffling input.") //TMP
+//    val preshuffleTimer = LoggingUtils.startCount("Shuffling input as a precursor to diagnosis.")
+//    //TODO: This is expensive.  We can instead shuffle only a part of the
+//    // input (since only diagnosticSubsampleSizes.sum*numDiagnosticSubsamples
+//    // rows are actually needed), or else assume that it has been shuffled
+//    // ahead of time.
+//    val shuffledInputRdd = RddUtils.randomlyPermute(inputRdd, new Random(seed).nextInt)
+//    shuffledInputRdd.foreach(_ => Unit) //TMP
+//    preshuffleTimer.stop()
+//    println("Done shuffling input.  Some rows: %s".format(shuffledInputRdd.take(15).deep.toString))
+    val shuffledInputRdd = inputRdd
     
     //TODO: Divide subsamples of different sizes, to allow for parallelism up
     // to numDiagnosticSubsamples*diagnosticSubsampleSizes.size.
