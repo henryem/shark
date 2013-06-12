@@ -9,6 +9,7 @@ import spark.OneToOneDependency
 import java.util.Random
 import spark.SparkContext._
 import spark.SparkContext
+import spark.HashPartitioner
 
 object RddUtils {
   def mean(rdd: RDD[Double]): Double = {
@@ -20,16 +21,26 @@ object RddUtils {
     sum / count
   }
   
-  def randomlyPermute[D: ClassManifest](rdd: RDD[D], seed: Int): RDD[D] = {
-    val parallelism = rdd.partitions.size
+  /**
+   * Randomly permute the elements of @rdd, distributing the resulting elements
+   * randomly among the existing partitions of @rdd.
+   */
+  def randomlyPermute[D: ClassManifest](rdd: RDD[D], seed: Int): RDD[D]
+    = randomlyPermute(rdd, rdd.partitions.size, seed)
+  
+  /**
+   * Randomly permute the elements of @rdd, distributing the resulting elements
+   * randomly among @numPartitions partitions.
+   */
+  def randomlyPermute[D: ClassManifest](rdd: RDD[D], numPartitions: Int, seed: Int): RDD[D] = {
     val random = new Random(seed)
     val shuffleSeed = random.nextInt
     val postShufflePermuteSeed = random.nextInt
     rdd.mapPartitionsWithIndex((partitionIdx, partition) => {
         val partitionRandom = new Random(shuffleSeed + partitionIdx)
-        partition.map(item => (partitionRandom.nextInt % parallelism, item))
+        partition.map(item => (partitionRandom.nextInt % numPartitions, item))
       })
-      .partitionBy(Partitioner.defaultPartitioner(rdd))
+      .partitionBy(new HashPartitioner(numPartitions))
       .mapPartitionsWithIndex((partitionIdx, partition) => {
         //FIXME: This post-partitioning shuffle seems unnecessarily expensive -
         // there ought to be a way to have Spark do the shuffle online.
@@ -38,6 +49,7 @@ object RddUtils {
       })
   }
   
+  /** Run @f, passing it @sc, and then destroy @sc.  Useful for testing. */
   def runAndStop[D](sc: SparkContext, f: SparkContext => D): D = {
     try {
       f(sc)
@@ -53,12 +65,20 @@ object RddUtils {
   }
   
   class RddPartitioningOps[D: ClassManifest](wrappedRdd: RDD[D]) {
+    /**
+     * Get an RDD containing only partition @partitionIdx from @wrappedRdd.
+     * The result has only 1 partition.
+     */
     def getSinglePartition(partitionIdx: Int): RDD[D] = {
       new PartitionFilteredRdd(wrappedRdd, idx => idx == partitionIdx)
     }
   }
   
   //TODO: Unit test.
+  /**
+   * An RDD containing only partitions from @parent whose indices match
+   * @partitionFilter.
+   */
   class PartitionFilteredRdd[D: ClassManifest](
       @transient private val parent: RDD[D],
       @transient private val partitionFilter: Int => Boolean)

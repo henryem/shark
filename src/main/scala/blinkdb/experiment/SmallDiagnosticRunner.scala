@@ -93,7 +93,7 @@ object SmallDiagnosticRunner {
       (implicit ev: ClassManifest[D]): DiagnosticOutput = {
     val loadTimer = LoggingUtils.startCount("Loading the data")
     val random = new Random(seed)
-    val permutedData = RddUtils.randomlyPermute(data, random.nextInt).persist()
+    val permutedData = RddUtils.randomlyPermute(data, numSplits, random.nextInt).persist()
     val partitionSizes = permutedData
       .mapPartitionsWithIndex({(partitionIdx, partition) => Iterator((partitionIdx, partition.size))})
       .collectAsMap
