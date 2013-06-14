@@ -65,7 +65,8 @@ object DiagnosticRunner extends LogHelper {
     // input (since only diagnosticSubsampleSizes.sum*numDiagnosticSubsamples
     // rows are actually needed), or else assume that it has been shuffled
     // ahead of time.
-    val shuffledInputRdd = RddUtils.randomlyPermute(inputRdd, parallelism, new Random(seed).nextInt)
+    //val shuffledInputRdd = RddUtils.randomlyPermute(inputRdd, parallelism, new Random(seed).nextInt)
+    val shuffledInputRdd = inputRdd //TMP
     
     //TODO: Divide subsamples of different sizes, to allow for parallelism up
     // to numDiagnosticSubsamples*diagnosticSubsampleSizes.size.
@@ -76,7 +77,7 @@ object DiagnosticRunner extends LogHelper {
         println("Computing diagnostic on partition %d".format(partitionIdx)) //TMP
         val random = new Random(seed + partitionIdx)
         val subsampleSizes = partitionToSubsampleSizes(partitionIdx)
-        val query = queryBuilder.forStage(ErrorAnalysisStage.DiagnosticExecution).build()
+        val query = queryBuilder.build()
         val subsampleResults: Seq[(Int, (SingleQueryIterateOutput, Seq[Seq[E]]))] = Await.result(
           LocalSpark.runInLocalContext({sc =>
             println("Running in local context") //TMP

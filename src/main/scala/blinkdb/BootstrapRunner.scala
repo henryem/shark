@@ -47,7 +47,7 @@ object BootstrapRunner extends LogHelper {
     //NOTE: The validity of this timing number relies on resampleRdds being an
     // eager collection.  There is no point in it being lazy, so this isn't a
     // big deal.
-    val query = queryBuilder.forStage(ErrorAnalysisStage.BootstrapExecution).build()
+    val query = queryBuilder.build()
     val queryCreationTimer = LoggingUtils.startCount("Creating resample queries and forming output RDDs")
     val resampleOutputsFuture = Futures.sequence(resampleRdds.map({ resampleRdd => query.execute(resampleRdd)(ec) }), ec)
     queryCreationTimer.stop()

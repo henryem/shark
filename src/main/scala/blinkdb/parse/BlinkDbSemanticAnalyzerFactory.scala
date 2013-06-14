@@ -17,14 +17,13 @@ object BlinkDbSemanticAnalyzerFactory {
   /**
    * Return a semantic analyzer for the given ASTNode.
    */
-  def get(conf: HiveConf, tree:ASTNode, analysisStage: ErrorAnalysisStage, inputRdd: Option[RDD[Any]]): BaseSemanticAnalyzer = {
+  def get(conf: HiveConf, tree:ASTNode, analysisStage: ErrorAnalysisStage): BaseSemanticAnalyzer = {
     //TODO: Taking @inputRdd as an argument is a bit inelegant.
     val baseSem = SharkSemanticAnalyzerFactory.get(conf, tree)
     if (baseSem.isInstanceOf[SharkSemanticAnalyzer] && shouldHandleQuery(tree)) {
       analysisStage match {
         case ErrorAnalysisStage.InputExtraction => new InputExtractionSemanticAnalyzer(conf)
-        case ErrorAnalysisStage.BootstrapExecution => new BootstrapSemanticAnalyzer(conf, inputRdd.get)
-        case ErrorAnalysisStage.DiagnosticExecution => new BootstrapSemanticAnalyzer(conf, inputRdd.get)
+        case ErrorAnalysisStage.AnalysisExecution => new BootstrapSemanticAnalyzer(conf) //FIXME: Rename to AnalysisSemanticAnalyzer
       }
     } else {
       baseSem

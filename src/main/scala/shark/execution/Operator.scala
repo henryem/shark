@@ -105,20 +105,30 @@ abstract class Operator[T <: HiveOperator] extends LogHelper with Serializable {
     }
   }
 
-  def returnTerminalOperators(): Seq[Operator[_ <: HiveOperator]] = {
-    if (_childOperators == null || _childOperators.size == 0) {
-      Seq(this)
-    } else {
-      _childOperators.flatMap(_.returnTerminalOperators())
-    }
-  }
+  def returnTerminalOperators(): Seq[Operator[_ <: HiveOperator]] =
+    findOpsBelowMatching(op => (op._childOperators == null || op._childOperators.size == 0))
 
-  def returnTopOperators(): Seq[Operator[_ <: HiveOperator]] = {
-    if (_parentOperators == null || _parentOperators.size == 0) {
-      Seq(this)
-    } else {
-      _parentOperators.flatMap(_.returnTopOperators())
-    }
+  def returnTopOperators(): Seq[Operator[_ <: HiveOperator]] =
+    findOpsAboveMatching(op => (op._parentOperators == null || op._parentOperators.size == 0))
+  
+  /**
+   * @return all descendent Shark Operators of this operator matching @filter.
+   * (Descendents include this operator and all operators between it and a
+   * terminal operator.) 
+   */
+  def findOpsBelowMatching(filter: Operator[_ <: HiveOperator] => Boolean): Seq[Operator[_ <: HiveOperator]] = {
+    val children = if (_childOperators != null) _childOperators else Nil
+    (if (filter(this)) Seq(this) else Nil) ++ children.flatMap(_.findOpsBelowMatching(filter))
+  }
+  
+  /**
+   * @return all ancestor Shark Operators of this operator matching @filter.
+   * (Ancestors include this operator and all operators between it and a
+   * top operator.) 
+   */
+  def findOpsAboveMatching(filter: Operator[_ <: HiveOperator] => Boolean): Seq[Operator[_ <: HiveOperator]] = {
+    val parents = if (_parentOperators != null) _parentOperators else Nil
+    (if (filter(this)) Seq(this) else Nil) ++ _parentOperators.flatMap(_.findOpsAboveMatching(filter))
   }
 
   @transient var hiveOp: T = _

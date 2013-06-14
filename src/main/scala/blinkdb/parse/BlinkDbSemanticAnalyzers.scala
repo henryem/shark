@@ -33,7 +33,11 @@ class InputExtractionSemanticAnalyzer(conf: HiveConf) extends SharkSemanticAnaly
   }
 }
 
-class BootstrapSemanticAnalyzer(conf: HiveConf, inputRdd: RDD[Any]) extends SharkSemanticAnalyzer(conf) {
+class BootstrapSemanticAnalyzer(conf: HiveConf) extends SharkSemanticAnalyzer(conf) {
+  /**
+   * Inserts an RddScanOperator after input scan operators.  This operator must
+   * later be initialized by setting its inputRdd field.
+   */
   override def executePostAnalysisHooks(terminalOps: Seq[TerminalOperator]): Seq[TerminalOperator] = {
     val topOperators = terminalOps.flatMap(_.returnTopOperators()).distinct
     val postInputScanOperators = BlinkDbSemanticAnalyzers.getPostInputScanOperators(topOperators)
@@ -46,7 +50,7 @@ class BootstrapSemanticAnalyzer(conf: HiveConf, inputRdd: RDD[Any]) extends Shar
     require(postInputScanOperatorAndChildren._2.size == 1)
     val parent = postInputScanOperatorAndChildren._1
     val child = postInputScanOperatorAndChildren._2.apply(0)
-    BlinkDbSemanticAnalyzers.insertRddScanOperator(child, parent, inputRdd)
+    BlinkDbSemanticAnalyzers.insertRddScanOperator(child, parent)
     terminalOps
   }
   
@@ -111,11 +115,11 @@ object BlinkDbSemanticAnalyzers {
   }
   
   /** 
-   * Make an RddScanOperator and insert it between @parent and @child.
+   * Make an RddScanOperator and insert it between @parent and @child.  Note
+   * that the inputRdd field of this operator must later be initialized.
    */
-  def insertRddScanOperator(child: shark.execution.Operator[_], parent: shark.execution.Operator[_], inputRdd: RDD[_]): RddScanOperator = {
+  def insertRddScanOperator(child: shark.execution.Operator[_], parent: shark.execution.Operator[_]): RddScanOperator = {
     val newOp = new RddScanOperator()
-    newOp.inputRdd = inputRdd
     val newHiveOp = RddScanOperator.makePartnerHiveOperator()
     newHiveOp.initializeCounters()
     newOp.hiveOp = newHiveOp

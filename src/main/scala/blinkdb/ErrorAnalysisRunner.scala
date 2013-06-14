@@ -57,7 +57,7 @@ object ErrorAnalysisRunner extends LogHelper {
       val random = new Random(123) //FIXME
       val executorService = Executors.newCachedThreadPool()
       implicit val ec = ExecutionContext.fromExecutorService(executorService)
-      val queryBuilder = new IndependentQueryExecutionBuilder().forCmd(cmd).withConf(conf)
+      val queryBuilder = new SharedOperatorTreeQueryExecutionBuilder().forStage(ErrorAnalysisStage.AnalysisExecution).forCommand(cmd, conf)
       val bootstrapFuture = CollectionUtils.sequence(if (errorAnalysisConf.bootstrapConf.doBootstrap) {
         Some(BootstrapRunner.doBootstrap(queryBuilder, rdd, errorQuantifier, errorAnalysisConf.bootstrapConf, random.nextInt)(ec))
       } else {
@@ -86,13 +86,13 @@ object ErrorAnalysisRunner extends LogHelper {
    * @return None if @cmd is not suitable for extracting input.
    */
   private def makeInputRdd(cmd: String, conf: HiveConf): Option[RDD[Any]] = {
-    val semOpt = QueryRunner.doSemanticAnalysis(cmd, ErrorAnalysisStage.InputExtraction, conf, None)
+    val semOpt = QueryRunner.doSemanticAnalysis(cmd, ErrorAnalysisStage.InputExtraction, conf)
     semOpt
       .filter(_.isInstanceOf[InputExtractionSemanticAnalyzer])
       .filter(_.asInstanceOf[SemanticAnalyzer].getParseContext().getQB().getIsQuery())
       .map(sem => {
         val intermediateInputOperators = QueryRunner.getIntermediateInputOperators(sem)
-        QueryRunner.initializeOperatorTree(sem)
+        QueryRunner.initializeOperatorTree(sem.getRootTasks().get(0)) //FIXME: Not sure if the 0th is always the right task.
       
         //TODO: Handle more than 1 sink.
         require(intermediateInputOperators.size == 1)

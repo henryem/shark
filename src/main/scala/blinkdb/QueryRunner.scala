@@ -29,6 +29,10 @@ import akka.util.Duration
 import javax.annotation.Nullable
 import shark.execution.serialization.SerializableWritable
 import org.apache.hadoop.hive.ql.session.SessionState
+import shark.execution.TerminalOperator
+import org.apache.hadoop.hive.ql.exec.Task
+import shark.execution.RddScanOperator
+import java.io.InvalidObjectException
 
 trait QueryExecutionBuilder[B <: QueryExecutionBuilder[B]] extends Serializable {
   def forStage(errorAnalysisStage: ErrorAnalysisStage): B
@@ -64,22 +68,31 @@ case class IndependentQueryExecutionBuilder(
     new IndependentQueryExecutionBuilder(this.stage, this.cmd, new SerializableWritable(newConf))
   }
   
-  override def build(): QueryExecution = new IndependentQueryExecution(cmd, stage, conf.t)
+  override def build(): QueryExecution = {
+    println("Building a single query in IndependentQueryExecution.") //TMP
+    new IndependentQueryExecution(cmd, stage, conf.t)
+  }
 }
 
+//NOTE: This only works in this process, nowhere else.
 case class IndependentQueryExecution(cmd: String, stage: ErrorAnalysisStage, conf: HiveConf)
     extends QueryExecution {
+  import QueryRunner._
   override def execute(inputRdd: RDD[Any])(implicit ec: ExecutionContext): Future[SingleQueryIterateOutput] = {
     QueryExecutionLock.synchronized {
-      println("Executing a single query in IndependentQueryExecution.")
+      println("Executing a single query in IndependentQueryExecution.") //TMP
       //HACK: Hive requires some thread-local state to be initialized.
       //TODO: This might require all of this work to be done in a separate
       // thread.
       SessionState.start(conf)
       
-      val sem = QueryRunner.doSemanticAnalysis(cmd, stage, conf, Some(inputRdd))
+      val sem = QueryRunner.doSemanticAnalysis(cmd, stage, conf)
       require(sem.isDefined) //FIXME
-      val (output, oi) = QueryRunner.executeOperatorTree(sem.get)
+      val executionTask = sem.get.getRootTasks().get(0)
+      val sourceOperators = getSourceOperators(sem.get)
+      insertInputRdd(inputRdd, sourceOperators)
+      QueryRunner.initializeOperatorTree(executionTask)
+      val (output, oi) = QueryRunner.executeOperatorTree(executionTask, sourceOperators)
       QueryRunner.collectSingleQueryOutput(output, oi)
     }
   }
@@ -93,39 +106,90 @@ case class IndependentQueryExecution(cmd: String, stage: ErrorAnalysisStage, con
 // when performing semantic analysis or executing a query.
 object QueryExecutionLock
 
-case class SharedOperatorTreeQueryExecutionBuilder(
+class SharedOperatorTreeQueryExecutionBuilder(
     @Nullable private val stage: ErrorAnalysisStage,
-    @Nullable private val sem: BootstrapSemanticAnalyzer)
+    @Nullable private val executionTask: Task[_ <: Serializable],
+    @Nullable private val sourceOps: Seq[shark.execution.Operator[_]])
     extends QueryExecutionBuilder[SharedOperatorTreeQueryExecutionBuilder] {
-  def this() = this(null, null)
+  import SharedOperatorTreeQueryExecutionBuilder._
+  
+  def this() = this(null, null, null)
   
   override def forStage(newStage: ErrorAnalysisStage): SharedOperatorTreeQueryExecutionBuilder = {
-    new SharedOperatorTreeQueryExecutionBuilder(newStage, this.sem)
+    new SharedOperatorTreeQueryExecutionBuilder(newStage, this.executionTask, this.sourceOps)
   }
-  def withAnalyzer(newSem: BootstrapSemanticAnalyzer): SharedOperatorTreeQueryExecutionBuilder = {
-    new SharedOperatorTreeQueryExecutionBuilder(this.stage, newSem)
+  //FIXME: This builder isn't really designed correctly any more.
+  def forCommand(cmd: String, conf: HiveConf): SharedOperatorTreeQueryExecutionBuilder = {
+    //HACK: Hive requires some thread-local state to be initialized.
+    //TODO: This might require all of this work to be done in a separate
+    // thread.
+    SessionState.start(conf)
+    
+    require(stage != null)
+    val sem = QueryRunner.doSemanticAnalysis(cmd, stage, conf)
+    require(sem.isDefined) //FIXME
+    val executionTask = sem.get.getRootTasks().get(0).asInstanceOf[Task[_ <: Serializable]]
+    val sourceOperators = QueryRunner.getSourceOperators(sem.get)
+    forTask(executionTask).withSourceOps(sourceOperators) //TMP
+  }
+  def forTask(executionTask: Task[_ <: Serializable]): SharedOperatorTreeQueryExecutionBuilder = {
+    new SharedOperatorTreeQueryExecutionBuilder(this.stage, executionTask, this.sourceOps)
+  }
+  def withSourceOps(sourceOps: Seq[shark.execution.Operator[_]]): SharedOperatorTreeQueryExecutionBuilder = {
+    new SharedOperatorTreeQueryExecutionBuilder(this.stage, this.executionTask, sourceOps)
   }
   
-  override def build(): QueryExecution = new SharedOperatorTreeQueryExecution(sem)
+  override def build(): QueryExecution = {
+    //FIXME: May need to check whether or not we've been serialized.  If not,
+    // we might initialize this task multiple times, which Shark doesn't seem
+    // to be happy about.
+    println("Building a single query in SharedOperatorTreeQueryExecution.") //TMP
+    QueryRunner.initializeOperatorTree(executionTask)
+    new SharedOperatorTreeQueryExecution(executionTask, sourceOps)
+  }
+  
+  def writeReplace(): Object = {
+    val serializableSourceOps = 
+    new SerializationProxy(stage, executionTask, serializableSourceOps)
+  }
+  
+  def readResolve(): Object
+    = throw new InvalidObjectException("Attempted to deserialize an object rather than its serialization proxy.")
 }
 
-//NOTE: This is currently broken.  Also, SemanticAnalyzer is not likely to be
-// serializable.
-case class SharedOperatorTreeQueryExecution(sem: BootstrapSemanticAnalyzer)
+object SharedOperatorTreeQueryExecutionBuilder {
+  private class SerializationProxy extends Serializable {
+    
+  }
+}
+
+//TODO: We're doing some extra serialization of the Operators here.
+case class SharedOperatorTreeQueryExecution(
+    private val executionTask: Task[_ <: Serializable],
+    private val sourceOps: Seq[shark.execution.Operator[_]])
     extends QueryExecution {
+  import QueryRunner._
   override def execute(inputRdd: RDD[Any])(implicit ec: ExecutionContext): Future[SingleQueryIterateOutput] = {
-//    sem.setInputRdd(inputRdd) //FIXME: Add this API to BootstrapSemanticAnalyzer.
-    val (output, oi) = QueryRunner.executeOperatorTree(sem)
-    QueryRunner.collectSingleQueryOutput(output, oi)
+    // We synchronize here because @executionTask and @sourceOps are shared
+    // across threads.  We don't want them to be executed concurrently.  Even
+    // if the ops themselves were thread-safe, the fact that they share an
+    // intermediate input operator means object that we cannot execute them
+    // concurrently with different intermediate input.  However, once we
+    // extract output RDDs, we are free to collect the RDDs concurrently.
+    QueryExecutionLock.synchronized {
+      println("Executing a single query in SharedOperatorTreeQueryExecution.") //TMP
+      insertInputRdd(inputRdd, sourceOps)
+      val (output, oi) = QueryRunner.executeOperatorTree(executionTask, sourceOps)
+      QueryRunner.collectSingleQueryOutput(output, oi)
+    }
   }
 }
 
 object QueryRunner extends LogHelper {
-  def logOperatorTree(sem: BaseSemanticAnalyzer): Unit = {
+  def logOperatorTree(sourceOperators: Seq[shark.execution.Operator[_]]): Unit = {
     if (!log.isDebugEnabled()) {
       return
     }
-    val sourceOperators: Seq[shark.execution.Operator[_]] = getSourceOperators(sem)
     def visit(operator: shark.execution.Operator[_]) {
       logDebug(
           "Operator %s, hiveOp %s, objectInspectors %s, children %s".format(
@@ -138,7 +202,7 @@ object QueryRunner extends LogHelper {
     sourceOperators.foreach(visit)
   }
   
-  def doSemanticAnalysis(cmd: String, stage: ErrorAnalysisStage, conf: HiveConf, inputRdd: Option[RDD[Any]]): Option[BaseSemanticAnalyzer] = {
+  def doSemanticAnalysis(cmd: String, stage: ErrorAnalysisStage, conf: HiveConf): Option[BaseSemanticAnalyzer] = {
     try {
       val command = new VariableSubstitution().substitute(conf, cmd)
       val context = new QueryContext(conf, false)
@@ -146,7 +210,7 @@ object QueryRunner extends LogHelper {
       context.setTryCount(Integer.MAX_VALUE)
 
       val tree = ParseUtils.findRootNonNullToken((new ParseDriver()).parse(command, context))
-      val sem = BlinkDbSemanticAnalyzerFactory.get(conf, tree, stage, inputRdd)
+      val sem = BlinkDbSemanticAnalyzerFactory.get(conf, tree, stage)
 
       //TODO: Currently I do not include configured SemanticAnalyzer hooks.
       sem.analyze(tree, context)
@@ -157,15 +221,15 @@ object QueryRunner extends LogHelper {
     }
   }
   
-  private def getSourceOperators(sem: BaseSemanticAnalyzer): Seq[shark.execution.Operator[_]] = {
+  def getSourceOperators(sem: BaseSemanticAnalyzer): Seq[shark.execution.Operator[_]] = {
     sem.getRootTasks()
       .map(_.getWork().asInstanceOf[SparkWork].terminalOperator.asInstanceOf[shark.execution.TerminalOperator])
       .flatMap(_.returnTopOperators())
       .distinct
   }
   
-  private def getSinkOperators(sem: BaseSemanticAnalyzer): Seq[shark.execution.Operator[_]] = {
-    getSourceOperators(sem).flatMap(_.returnTerminalOperators()).distinct
+  def getSinkOperators(sourceOperators: Seq[shark.execution.Operator[_]]): Seq[shark.execution.Operator[_]] = {
+    sourceOperators.flatMap(_.returnTerminalOperators()).distinct
   }
   
   def getIntermediateInputOperators(sem: BaseSemanticAnalyzer): Seq[IntermediateCacheOperator] = {
@@ -173,13 +237,25 @@ object QueryRunner extends LogHelper {
     Seq(sem.asInstanceOf[InputExtractionSemanticAnalyzer].intermediateInputOperator)
   }
   
+  def getIntermediateRddScanOperators(sourceOps: Seq[shark.execution.Operator[_]]): Seq[RddScanOperator] = {
+    val rddScanOps = sourceOps.flatMap(sourceOp => sourceOp.findOpsBelowMatching(_.isInstanceOf[RddScanOperator]))
+    require(rddScanOps.size == 1, "Only queries with exactly 1 RddScanOperator are supported, but found %d.".format(rddScanOps.size))
+    rddScanOps.map(_.asInstanceOf[RddScanOperator])
+  }
+  
+  def insertInputRdd(inputRdd: RDD[_], sourceOps: Seq[shark.execution.Operator[_]]) {
+    val intermediateOps = getIntermediateRddScanOperators(sourceOps)
+    require(intermediateOps.size == 1)
+    val intermediateOp = intermediateOps(0)
+    intermediateOp.inputRdd = inputRdd
+  }
+  
   /** 
-   * Initialize all operators in the operator tree contained in @sem.  After
-   * this, it is okay to call execute() on any operator in this tree.
+   * Initialize @executionTask for execution.  This needs to be done after it
+   * is constructed or deserialized.
    */
-  def initializeOperatorTree(sem: BaseSemanticAnalyzer): Unit = {
-    val executionTask = sem.getRootTasks().get(0)
-    require(executionTask.isInstanceOf[SparkTask])
+  def initializeOperatorTree(executionTask: Task[_]): Unit = {
+    require(executionTask.isInstanceOf[SparkTask], "Expected to execute a SparkTask, but instead found %s.".format(executionTask))
     val work = executionTask.getWork()
     require(work.isInstanceOf[SparkWork])
     val terminalOp = work.asInstanceOf[SparkWork].terminalOperator
@@ -193,10 +269,9 @@ object QueryRunner extends LogHelper {
    * Execute the operator tree in @sem, producing an output RDD and an
    * ObjectInspector that can be used to interpret its rows.
    */
-  def executeOperatorTree(sem: BaseSemanticAnalyzer): (RDD[Any], StructObjectInspector) = {
-    val sinkOperators: Seq[shark.execution.Operator[_]] = getSinkOperators(sem)
-    initializeOperatorTree(sem)
-    logOperatorTree(sem)
+  def executeOperatorTree(executionTask: Task[_], sourceOperators: Seq[shark.execution.Operator[_]]): (RDD[Any], StructObjectInspector) = {
+    val sinkOperators: Seq[shark.execution.Operator[_]] = getSinkOperators(sourceOperators)
+    logOperatorTree(sourceOperators)
     //TODO: Handle more than 1 sink.
     require(sinkOperators.size == 1, "During bootstrap: Found %d sinks, expected 1.".format(sinkOperators.size))
     val sinkOperator = sinkOperators(0).asInstanceOf[shark.execution.TerminalOperator]

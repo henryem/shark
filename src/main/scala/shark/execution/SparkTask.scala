@@ -17,32 +17,78 @@
 
 package shark.execution
 
-import java.util.{HashMap => JHashMap, List => JavaList}
+import java.util.{HashMap => JHashMap, List => JavaList, Map => JavaMap, Set => JavaSet}
 import java.io.File
-
+import org.apache.hadoop.hive.conf.HiveConf
 import org.apache.hadoop.hive.metastore.api.FieldSchema
 import org.apache.hadoop.hive.ql.{Context, DriverContext}
 import org.apache.hadoop.hive.ql.exec.{TableScanOperator => HiveTableScanOperator, Utilities}
 import org.apache.hadoop.hive.ql.metadata.{Partition, Table}
 import org.apache.hadoop.hive.ql.optimizer.ppr.PartitionPruner
 import org.apache.hadoop.hive.ql.parse._
-import org.apache.hadoop.hive.ql.plan.{PlanUtils, CreateTableDesc, PartitionDesc}
+import org.apache.hadoop.hive.ql.plan.{PlanUtils, CreateTableDesc, PartitionDesc, ExprNodeDesc}
 import org.apache.hadoop.hive.ql.plan.api.StageType
 import org.apache.hadoop.hive.ql.session.SessionState
-
 import scala.collection.JavaConversions._
-
 import shark.api.TableRDD
 import shark.{LogHelper, SharkEnv}
 import spark.RDD
+import java.io.InvalidObjectException
+import shark.execution.serialization.SerializableWritable
 
 
 class SparkWork(
-  val pctx: ParseContext,
-  val terminalOperator: TerminalOperator,
-  val resultSchema: JavaList[FieldSchema])
-extends java.io.Serializable
+    val topToTable: JavaMap[HiveTableScanOperator, Table],
+    val opToPartPruner: JavaMap[HiveTableScanOperator, ExprNodeDesc],
+    val confWrapper: SerializableWritable[HiveConf],
+    val prunedPartitionListWrapper: Map[String, PrunedPartitionListSerializationWrapper],
+    val terminalOperator: TerminalOperator,
+    val resultSchema: JavaList[FieldSchema])
+    extends java.io.Serializable {
+  def prunedPartitionList(): JavaMap[String, PrunedPartitionList] = prunedPartitionListWrapper.mapValues(_.prunedPartitionList)
+  def conf(): HiveConf = confWrapper.t
+}
 
+object SparkWork {
+  /** Convenience constructor from a ParseContext and other necessary data. */
+  def fromParseContext(pctx: ParseContext, terminalOperator: TerminalOperator, resultSchema: JavaList[FieldSchema]): SparkWork = {
+    new SparkWork(
+        pctx.getTopToTable(),
+        pctx.getOpToPartPruner(),
+        new SerializableWritable(pctx.getConf()),
+        pctx.getPrunedPartitions().mapValues(ppl => new PrunedPartitionListSerializationWrapper(ppl)).toMap,
+        terminalOperator,
+        resultSchema)
+  }
+}
+
+/** PrunedPartitionList is not serializable; this wrapper makes it so. */
+class PrunedPartitionListSerializationWrapper(
+    @transient val prunedPartitionList: PrunedPartitionList)
+    extends java.io.Serializable {
+  import PrunedPartitionListSerializationWrapper._
+  
+  private def writeReplace(): Object
+    = new SerializationProxy(
+        prunedPartitionList.getConfirmedPartns(),
+        prunedPartitionList.getUnknownPartns(),
+        prunedPartitionList.getDeniedPartns())
+  
+  private def readResolve(): Object
+    = throw new InvalidObjectException("Attempted to deserialize an object rather than its serialization proxy.")
+}
+
+object PrunedPartitionListSerializationWrapper {
+  private class SerializationProxy(
+      private val confirmedPartns: JavaSet[Partition],
+      private val unknownPartns: JavaSet[Partition],
+      private val deniedPartns: JavaSet[Partition]
+      ) extends java.io.Serializable {
+    private def readResolve(): Object
+      = new PrunedPartitionListSerializationWrapper(new PrunedPartitionList(
+          confirmedPartns, unknownPartns, deniedPartns))
+  }
+}
 
 /**
  * SparkTask executes a query plan composed of RDD operators.
@@ -109,7 +155,7 @@ object SparkTask {
   
   def initializeTableScanTableDesc(topOps: Seq[TableScanOperator], work: SparkWork) {
     // topToTable maps Hive's TableScanOperator to the Table object.
-    val topToTable: JHashMap[HiveTableScanOperator, Table] = work.pctx.getTopToTable()
+    val topToTable: JavaMap[HiveTableScanOperator, Table] = work.topToTable
 
     // Add table metadata to TableScanOperators
     topOps.foreach { op =>
@@ -119,9 +165,9 @@ object SparkTask {
       if (op.table.isPartitioned) {
         val ppl = PartitionPruner.prune(
           op.table,
-          work.pctx.getOpToPartPruner().get(op.hiveOp),
-          work.pctx.getConf(), "",
-          work.pctx.getPrunedPartitions())
+          work.opToPartPruner.get(op.hiveOp),
+          work.conf, "",
+          work.prunedPartitionList)
         op.parts = ppl.getConfirmedPartns.toArray ++ ppl.getUnknownPartns.toArray
         val allParts = op.parts ++ ppl.getDeniedPartns.toArray
         if (allParts.size == 0) {
