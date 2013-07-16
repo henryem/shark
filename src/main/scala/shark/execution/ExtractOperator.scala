@@ -18,50 +18,30 @@
 package shark.execution
 
 import scala.reflect.BeanProperty
-
 import org.apache.hadoop.hive.conf.HiveConf
 import org.apache.hadoop.hive.ql.exec.{ExprNodeEvaluator, ExprNodeEvaluatorFactory}
 import org.apache.hadoop.hive.ql.exec.{ExtractOperator => HiveExtractOperator}
 import org.apache.hadoop.hive.ql.plan.{ExtractDesc, TableDesc}
 import org.apache.hadoop.hive.serde2.Deserializer
 import org.apache.hadoop.io.BytesWritable
-
 import spark.RDD
+import shark.execution.serialization.SerializableWritable
+import shark.execution.serialization.SerializableHiveConf
+import shark.execution.serialization.XmlSerializer
 
 
-class ExtractOperator extends UnaryOperator[HiveExtractOperator] with HiveTopOperator {
-
-  @BeanProperty var conf: ExtractDesc = _
-  @BeanProperty var valueTableDesc: TableDesc = _
-  @BeanProperty var localHconf: HiveConf = _
-
-  @transient var eval: ExprNodeEvaluator = _
-  @transient var valueDeser: Deserializer = _
-
-  override def initializeOnMaster() {
-    conf = hiveOp.getConf()
-    localHconf = super.hconf
-    valueTableDesc = keyValueTableDescs.values.head._2
-  }
-
-  override def initializeOnSlave() {
-    eval = ExprNodeEvaluatorFactory.get(conf.getCol)
-    eval.initialize(objectInspector)
-    valueDeser = valueTableDesc.getDeserializerClass().newInstance()
-    valueDeser.initialize(localHconf, valueTableDesc.getProperties())
-  }
-
+class ExtractOperator extends SimpleUnaryOperator[HiveExtractOperator] with HiveTopOperator {
   override def preprocessRdd(rdd: RDD[_]): RDD[_] = {
     // TODO: hasOrder and limit should really be made by optimizer.
     val hasOrder = parentOperator match {
       case op: ReduceSinkOperator =>
-        op.getConf.getOrder != null && !op.getConf.getOrder.isEmpty
+        op.hiveOp.getConf.getOrder != null && !op.hiveOp.getConf.getOrder.isEmpty
       case _ => false
     }
 
     // Whether to consolidate all data to one partition.
     val consolidate = parentOperator match {
-      case op: ReduceSinkOperator => op.getConf.getNumReducers == 1
+      case op: ReduceSinkOperator => op.hiveOp.getConf.getNumReducers == 1
       case _ => false
     }
 
@@ -115,17 +95,37 @@ class ExtractOperator extends UnaryOperator[HiveExtractOperator] with HiveTopOpe
         new ReduceKeyPartitioner(numParts))
     }
   }
+  
+  override def makePartitionProcessor(): PartitionProcessor = {
+    val valueTableDesc = keyValueTableDescs.values.head._2
+    new ExtractOperator.ExtractOperatorPartitionProcessor(
+        valueTableDesc,
+        new SerializableHiveConf(hconf, XmlSerializer.getUseCompression(hconf)))
+  }
+}
 
-  override def processPartition(split: Int, iter: Iterator[_]) = {
-    // TODO: use MutableBytesWritable to avoid the array copy.
-    val writable = new BytesWritable
-    iter map {
-      case (key, value: Array[Byte]) => {
-        writable.set(value, 0, value.length)
-        valueDeser.deserialize(writable)
-      }
-      case unrecognizedObj => {
-        throw new RuntimeException("Did not find key, value pair: " + unrecognizedObj.toString)
+object ExtractOperator {
+  private class ExtractOperatorPartitionProcessor(
+      private val valueTableDesc: TableDesc,
+      private val hconf: SerializableHiveConf)
+      extends PartitionProcessor {
+    private def valueDeser() = {
+      val valueDeserInstance = valueTableDesc.getDeserializerClass().newInstance()
+      valueDeserInstance.initialize(hconf.value, valueTableDesc.getProperties())
+      valueDeserInstance
+    }
+    
+    override def processPartition(split: Int, iter: Iterator[_]) = {
+      // TODO: use MutableBytesWritable to avoid the array copy.
+      val writable = new BytesWritable
+      iter map {
+        case (key, value: Array[Byte]) => {
+          writable.set(value, 0, value.length)
+          valueDeser.deserialize(writable)
+        }
+        case unrecognizedObj => {
+          throw new RuntimeException("Did not find key, value pair: " + unrecognizedObj.toString)
+        }
       }
     }
   }

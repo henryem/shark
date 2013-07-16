@@ -30,9 +30,16 @@ import org.apache.hadoop.hive.ql.session.SessionState
  * lazily if the log level is enabled.
  * 
  * It differs from the Spark's Logging trait in that it can print out the
- * error to the specified console of the Hive session.
+ * error to the specified console of the Hive session.  It also modifies access
+ * rules to make logging methods public, which is convenient in many cases.
  */
 trait LogHelper extends spark.Logging {
+
+  override def logDebug(msg: => String) = super.logDebug(msg)
+  
+  override def logInfo(msg: => String) = super.logInfo(msg)
+
+  override def logWarning(msg: => String) = super.logWarning(msg)
 
   override def logError(msg: => String) = {
     errStream().println(msg)

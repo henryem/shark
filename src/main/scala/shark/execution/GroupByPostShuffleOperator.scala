@@ -36,7 +36,6 @@ import org.apache.hadoop.io.BytesWritable
 
 import shark.SharkEnv
 import shark.execution._
-import shark.execution.serialization.OperatorSerializationWrapper
 
 import spark.{Aggregator, HashPartitioner, RDD}
 import spark.rdd.ShuffledRDD

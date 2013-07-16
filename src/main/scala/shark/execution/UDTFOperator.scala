@@ -18,59 +18,63 @@
 package shark.execution
 
 import java.util.{List => JavaList}
-
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.JavaConversions._
 import scala.reflect.BeanProperty
-
 import org.apache.hadoop.hive.ql.exec.{UDTFOperator => HiveUDTFOperator}
 import org.apache.hadoop.hive.ql.plan.UDTFDesc
 import org.apache.hadoop.hive.ql.udf.generic.Collector
 import org.apache.hadoop.hive.serde2.objectinspector.{ ObjectInspector,
   StandardStructObjectInspector, StructField, StructObjectInspector }
+import shark.execution.serialization.SerializableObjectInspectors
 
 
-class UDTFOperator extends UnaryOperator[HiveUDTFOperator] {
-
-  @BeanProperty var conf: UDTFDesc = _
-
-  @transient var objToSendToUDTF: Array[java.lang.Object] = _
-  @transient var soi: StandardStructObjectInspector = _
-  @transient var inputFields: JavaList[_ <: StructField] = _
-  @transient var collector: UDTFCollector = _
-
-  override def initializeOnMaster() {
-    conf = hiveOp.getConf()
+class UDTFOperator extends SimpleUnaryOperator[HiveUDTFOperator] {
+  override def makePartitionProcessor(): UDTFOperator.UDTFPartitionProcessor = {
+    new UDTFOperator.UDTFPartitionProcessor(
+        hiveOp.getConf(),
+        new SerializableObjectInspectors(hiveOp.getInputObjInspectors()))
   }
+}
 
-  override def initializeOnSlave() {
-    collector = new UDTFCollector
-    conf.getGenericUDTF().setCollector(collector)
-
-    // Make an object inspector [] of the arguments to the UDTF
-    soi = objectInspectors.head.asInstanceOf[StandardStructObjectInspector]
-    inputFields = soi.getAllStructFieldRefs()
-
-    val udtfInputOIs = inputFields.map { case inputField =>
-      inputField.getFieldObjectInspector()
-    }.toArray
-
-    objToSendToUDTF = new Array[java.lang.Object](inputFields.size)
-    val udtfOutputOI = conf.getGenericUDTF().initialize(udtfInputOIs)
-  }
-
-  override def processPartition(split: Int, iter: Iterator[_]): Iterator[_] = {
-    iter.flatMap { row =>
-      explode(row)
+object UDTFOperator {
+  //HACK: This class should be private.  Currently, LateralViewJoinOperator reaches
+    // intrusively into the internals of UDTFOperator and needs access to
+    // makeExploder().
+  class UDTFPartitionProcessor(
+      private val conf: UDTFDesc,
+      private val serializableObjectInspectors: SerializableObjectInspectors[ObjectInspector])
+      extends PartitionProcessor {
+    override def processPartition(split: Int, iter: Iterator[_]): Iterator[_] = {
+      iter.flatMap(makeExploder())
     }
-  }
-
-  def explode[T](row: T): ArrayBuffer[java.lang.Object] = {
-    (0 until inputFields.size).foreach { case i =>
-      objToSendToUDTF(i) = soi.getStructFieldData(row, inputFields.get(i))
+    
+    //HACK: This should be private.  Currently, LateralViewJoinOperator reaches
+    // intrusively into the internals of UDTFOperator and needs access to
+    // makeExploder().
+    def makeExploder(): Any => ArrayBuffer[java.lang.Object] = {
+      val collector = new UDTFCollector
+      conf.getGenericUDTF().setCollector(collector)
+  
+      // Make an object inspector [] of the arguments to the UDTF
+      val soi = serializableObjectInspectors.value.toArray.head.asInstanceOf[StandardStructObjectInspector]
+      val inputFields = soi.getAllStructFieldRefs()
+  
+      val udtfInputOIs = inputFields.map { case inputField =>
+        inputField.getFieldObjectInspector()
+      }.toArray
+  
+      val objToSendToUDTF = new Array[java.lang.Object](inputFields.size)
+      conf.getGenericUDTF().initialize(udtfInputOIs)
+      
+      (row: Any) => {
+        (0 until inputFields.size).foreach { case i =>
+          objToSendToUDTF(i) = soi.getStructFieldData(row, inputFields.get(i))
+        }
+        conf.getGenericUDTF().process(objToSendToUDTF)
+        collector.collectRows()
+      }
     }
-    conf.getGenericUDTF().process(objToSendToUDTF)
-    collector.collectRows()
   }
 }
 

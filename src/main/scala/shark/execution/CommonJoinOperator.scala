@@ -18,11 +18,9 @@
 package shark.execution
 
 import java.util.{HashMap => JavaHashMap, List => JavaList}
-
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.JavaConversions._
 import scala.reflect.BeanProperty
-
 import org.apache.hadoop.hive.conf.HiveConf
 import org.apache.hadoop.hive.ql.exec.ExprNodeEvaluator
 import org.apache.hadoop.hive.ql.exec.{CommonJoinOperator => HiveCommonJoinOperator}
@@ -30,68 +28,110 @@ import org.apache.hadoop.hive.ql.exec.{JoinUtil => HiveJoinUtil}
 import org.apache.hadoop.hive.ql.plan.{ExprNodeDesc, JoinCondDesc, JoinDesc, TableDesc}
 import org.apache.hadoop.hive.serde2.Deserializer
 import org.apache.hadoop.hive.serde2.objectinspector.{ObjectInspector, PrimitiveObjectInspector}
-
 import shark.SharkConfVars
-
+import shark.execution.serialization.SerializableObjectInspectors
 import spark.RDD
 import spark.rdd.UnionRDD
 import spark.SparkContext.rddToPairRDDFunctions
+import shark.execution.serialization.SerializableHiveConf
 
 
-abstract class CommonJoinOperator[JOINDESCTYPE <: JoinDesc, T <: HiveCommonJoinOperator[JOINDESCTYPE]]
-  extends NaryOperator[T] {
+//abstract class CommonJoinOperator[JOINDESCTYPE <: JoinDesc, T <: HiveCommonJoinOperator[JOINDESCTYPE]]
+//  extends SimpleNaryOperator[T] {
+//
+//  @BeanProperty var conf: JOINDESCTYPE = _
+//  // Order in which the results should be output.
+//  @BeanProperty var order: Array[java.lang.Byte] = _
+//  // condn determines join property (left, right, outer joins).
+//  @BeanProperty var joinConditions: Array[JoinCondDesc] = _
+//  @BeanProperty var numTables: Int = _
+//  @BeanProperty var nullCheck: Boolean = _
+//
+//  @transient
+//  var joinVals: JavaHashMap[java.lang.Byte, JavaList[ExprNodeEvaluator]] = _
+//  @transient
+//  var joinFilters: JavaHashMap[java.lang.Byte, JavaList[ExprNodeEvaluator]] = _
+//  @transient
+//  var joinValuesObjectInspectors: JavaHashMap[java.lang.Byte, JavaList[ObjectInspector]] = _
+//  @transient
+//  var joinFilterObjectInspectors: JavaHashMap[java.lang.Byte, JavaList[ObjectInspector]] = _
+//  @transient
+//  var joinValuesStandardObjectInspectors: JavaHashMap[java.lang.Byte, JavaList[ObjectInspector]] = _
+//
+//  @transient var noOuterJoin: Boolean = _
+//
+//  override def initializeOnMaster() {
+//    conf = hiveOp.getConf()
+//
+//    order = conf.getTagOrder()
+//    joinConditions = conf.getConds()
+//    numTables = parentOperators.size
+//    nullCheck = SharkConfVars.getBoolVar(hconf, SharkConfVars.JOIN_CHECK_NULL)
+//
+//    assert(joinConditions.size + 1 == numTables)
+//  }
+//
+//  override def initializeOnSlave() {
+//
+//    noOuterJoin = conf.isNoOuterJoin
+//
+//    joinVals = new JavaHashMap[java.lang.Byte, JavaList[ExprNodeEvaluator]]
+//    HiveJoinUtil.populateJoinKeyValue(
+//      joinVals, conf.getExprs(), order, CommonJoinOperator.NOTSKIPBIGTABLE)
+//
+//    joinFilters = new JavaHashMap[java.lang.Byte, JavaList[ExprNodeEvaluator]]
+//    HiveJoinUtil.populateJoinKeyValue(
+//      joinFilters, conf.getFilters(), order, CommonJoinOperator.NOTSKIPBIGTABLE)
+//
+//    joinValuesObjectInspectors = HiveJoinUtil.getObjectInspectorsFromEvaluators(
+//      joinVals, objectInspectors.toArray, CommonJoinOperator.NOTSKIPBIGTABLE)
+//    joinFilterObjectInspectors = HiveJoinUtil.getObjectInspectorsFromEvaluators(
+//      joinFilters, objectInspectors.toArray, CommonJoinOperator.NOTSKIPBIGTABLE)
+//    joinValuesStandardObjectInspectors = HiveJoinUtil.getStandardObjectInspectors(
+//      joinValuesObjectInspectors, CommonJoinOperator.NOTSKIPBIGTABLE)
+//  }
+//}
 
-  @BeanProperty var conf: JOINDESCTYPE = _
-  // Order in which the results should be output.
-  @BeanProperty var order: Array[java.lang.Byte] = _
-  // condn determines join property (left, right, outer joins).
-  @BeanProperty var joinConditions: Array[JoinCondDesc] = _
-  @BeanProperty var numTables: Int = _
-  @BeanProperty var nullCheck: Boolean = _
-
-  @transient
-  var joinVals: JavaHashMap[java.lang.Byte, JavaList[ExprNodeEvaluator]] = _
-  @transient
-  var joinFilters: JavaHashMap[java.lang.Byte, JavaList[ExprNodeEvaluator]] = _
-  @transient
-  var joinValuesObjectInspectors: JavaHashMap[java.lang.Byte, JavaList[ObjectInspector]] = _
-  @transient
-  var joinFilterObjectInspectors: JavaHashMap[java.lang.Byte, JavaList[ObjectInspector]] = _
-  @transient
-  var joinValuesStandardObjectInspectors: JavaHashMap[java.lang.Byte, JavaList[ObjectInspector]] = _
-
-  @transient var noOuterJoin: Boolean = _
-
-  override def initializeOnMaster() {
-    conf = hiveOp.getConf()
-
-    order = conf.getTagOrder()
-    joinConditions = conf.getConds()
-    numTables = parentOperators.size
-    nullCheck = SharkConfVars.getBoolVar(hconf, SharkConfVars.JOIN_CHECK_NULL)
-
-    assert(joinConditions.size + 1 == numTables)
-  }
-
-  override def initializeOnSlave() {
-
-    noOuterJoin = conf.isNoOuterJoin
-
-    joinVals = new JavaHashMap[java.lang.Byte, JavaList[ExprNodeEvaluator]]
+/**
+ * Some state used in remote computation in various join operators.
+ */
+//TODO: Check whether @transient lazy vals work with Kryo serialization.
+class CommonJoinPartitionProcessingState[JOINDESCTYPE <: JoinDesc](
+    val conf: JOINDESCTYPE,
+    val hconf: SerializableHiveConf,
+    val objectInspectors: SerializableObjectInspectors[ObjectInspector],
+    val numTables: Int)
+    extends Serializable {
+  @transient lazy val order = conf.getTagOrder()
+  
+  @transient lazy val joinConditions = conf.getConds()
+  
+  @transient lazy val noOuterJoin = conf.isNoOuterJoin()
+  
+  def nullCheck = SharkConfVars.getBoolVar(hconf.value, SharkConfVars.JOIN_CHECK_NULL)
+  
+  @transient lazy val joinVals = {
+    val joinVals = new JavaHashMap[java.lang.Byte, JavaList[ExprNodeEvaluator]]
     HiveJoinUtil.populateJoinKeyValue(
       joinVals, conf.getExprs(), order, CommonJoinOperator.NOTSKIPBIGTABLE)
-
-    joinFilters = new JavaHashMap[java.lang.Byte, JavaList[ExprNodeEvaluator]]
+    joinVals
+  }
+  
+  @transient lazy val joinFilters = {
+    val joinFilters = new JavaHashMap[java.lang.Byte, JavaList[ExprNodeEvaluator]]
     HiveJoinUtil.populateJoinKeyValue(
       joinFilters, conf.getFilters(), order, CommonJoinOperator.NOTSKIPBIGTABLE)
-
-    joinValuesObjectInspectors = HiveJoinUtil.getObjectInspectorsFromEvaluators(
-      joinVals, objectInspectors.toArray, CommonJoinOperator.NOTSKIPBIGTABLE)
-    joinFilterObjectInspectors = HiveJoinUtil.getObjectInspectorsFromEvaluators(
-      joinFilters, objectInspectors.toArray, CommonJoinOperator.NOTSKIPBIGTABLE)
-    joinValuesStandardObjectInspectors = HiveJoinUtil.getStandardObjectInspectors(
-      joinValuesObjectInspectors, CommonJoinOperator.NOTSKIPBIGTABLE)
+    joinFilters
   }
+
+  @transient lazy val joinValuesObjectInspectors = HiveJoinUtil.getObjectInspectorsFromEvaluators(
+      joinVals, objectInspectors.value.toArray, CommonJoinOperator.NOTSKIPBIGTABLE)
+  
+  @transient lazy val joinFilterObjectInspectors = HiveJoinUtil.getObjectInspectorsFromEvaluators(
+      joinFilters, objectInspectors.value.toArray, CommonJoinOperator.NOTSKIPBIGTABLE)
+  
+  @transient lazy val joinValuesStandardObjectInspectors = HiveJoinUtil.getStandardObjectInspectors(
+      joinValuesObjectInspectors, CommonJoinOperator.NOTSKIPBIGTABLE)
 }
 
 

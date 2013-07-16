@@ -19,11 +19,9 @@ package shark.execution
 
 import java.io.{File, InputStream}
 import java.util.{Arrays, Properties}
-
 import scala.collection.JavaConversions._
 import scala.io.Source
 import scala.reflect.BeanProperty
-
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.hive.conf.HiveConf
 import org.apache.hadoop.hive.ql.exec.{ScriptOperator => HiveScriptOperator}
@@ -32,12 +30,11 @@ import org.apache.hadoop.hive.ql.plan.ScriptDesc
 import org.apache.hadoop.hive.serde2.{Serializer, Deserializer}
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
 import org.apache.hadoop.io.{BytesWritable, Writable}
-
-import shark.execution.serialization.OperatorSerializationWrapper
-
 import spark.{OneToOneDependency, RDD, SparkEnv}
-// Note that SparkFiles class is written in Java in Spark.
 import spark.SparkFiles
+import shark.execution.serialization.SerializableHiveConf
+import shark.execution.serialization.SerializableObjectInspector
+import shark.execution.serialization.XmlSerializer
 
 
 /**
@@ -45,15 +42,7 @@ import spark.SparkFiles
  *
  * Example: select transform(key) using 'cat' as cola from src;
  */
-class ScriptOperator extends UnaryOperator[HiveScriptOperator] {
-
-  @BeanProperty var localHiveOp: HiveScriptOperator = _
-  @BeanProperty var localHconf: HiveConf = _
-  @BeanProperty var alias: String = _
-
-  @transient var scriptInputSerializer: Serializer = _
-  @transient var scriptOutputDeserializer: Deserializer = _
-
+class ScriptOperator extends Operator[HiveScriptOperator] with UnaryOperator[HiveScriptOperator] {
   /**
    * Override execute. (Don't deal with preprocessRdd, postprocessRdd here.)
    */
@@ -61,112 +50,30 @@ class ScriptOperator extends UnaryOperator[HiveScriptOperator] {
     // First run parent.
     val inputRdd = executeParents().head._2
 
-    val op = OperatorSerializationWrapper(this)
     val (command, envs) = getCommandAndEnvs()
     val outRecordReaderClass: Class[_ <: RecordReader] = hiveOp.getConf().getOutRecordReaderClass()
     val inRecordWriterClass: Class[_ <: RecordWriter] = hiveOp.getConf().getInRecordWriterClass()
     logInfo("Using %s and %s".format(outRecordReaderClass, inRecordWriterClass))
+    
+    val objectInspector = objectInspectors.head
+    val partitionProcessor = new ScriptOperator.ScriptPartitionProcessor(
+        hiveOp.getConf(),
+        new SerializableHiveConf(hconf, XmlSerializer.getUseCompression(hconf)),
+        new SerializableObjectInspector(objectInspector),
+        command,
+        envs)
 
-    // Deserialize the output from script back to what Hive understands.
-    inputRdd.mapPartitions { part =>
-      op.initializeOnSlave()
-
-      // Serialize the data so it is recognizable by the script.
-      val iter = op.serializeForScript(part)
-
-      // Rebuild the command to specify paths on each node.
-      // For example, if the command is "python test.py data.dat", the following can turn
-      // it into "python /path/to/workdir/test.py /path/to/workdir/data.dat".
-      val workingDir = System.getProperty("user.dir")
-      val newCmd = command.map { arg =>
-        val uploadedFile = SparkFiles.get(arg)
-        if (new File(uploadedFile).exists()) {
-          uploadedFile
-        } else {
-          arg
-        }
-      }
-      val pb = new ProcessBuilder(newCmd.toSeq)
-      pb.directory(new File(workingDir))
-      // Add the environmental variables to the process.
-      val currentEnvVars = pb.environment()
-      envs.foreach { case(variable, value) => currentEnvVars.put(variable, value) }
-
-      val proc = pb.start()
-      val hconf = op.localHconf
-
-      // Get the thread local SparkEnv so we can pass it into the new thread.
-      val sparkEnv = SparkEnv.get
-
-      // Start a thread to print the process's stderr to ours
-      new Thread("stderr reader for " + command) {
-        override def run() {
-          for(line <- Source.fromInputStream(proc.getErrorStream).getLines) {
-            System.err.println(line)
-          }
-        }
-      }.start()
-
-      // Start a thread to feed the process input from our parent's iterator
-      new Thread("stdin writer for " + command) {
-        override def run() {
-          // Set the thread local SparkEnv.
-          SparkEnv.set(sparkEnv)
-          val recordWriter = inRecordWriterClass.newInstance
-          recordWriter.initialize(proc.getOutputStream, op.localHconf)
-          for(elem <- iter) {
-            recordWriter.write(elem)
-          }
-          recordWriter.close()
-        }
-      }.start()
-
-      // Return an iterator that reads outputs from RecordReader. Use our own
-      // BinaryRecordReader if necessary because Hive's has a bug (see below).
-      val recordReader: RecordReader =
-        if (outRecordReaderClass == classOf[org.apache.hadoop.hive.ql.exec.BinaryRecordReader]) {
-          new ScriptOperator.CustomBinaryRecordReader
-        } else {
-          outRecordReaderClass.newInstance
-        }
-      recordReader.initialize(
-        proc.getInputStream,
-        op.localHconf,
-        op.localHiveOp.getConf().getScriptOutputInfo().getProperties())
-
-      op.deserializeFromScript(new ScriptOperator.RecordReaderIterator(recordReader))
-    }
-  }
-
-  override def initializeOnMaster() {
-    localHiveOp = hiveOp
-    localHconf = super.hconf
-    // Set parent to null so we won't serialize the entire query plan.
-    hiveOp.setParentOperators(null)
-    hiveOp.setChildOperators(null)
-    hiveOp.setInputObjInspectors(null)
-  }
-
-  override def initializeOnSlave() {
-    scriptOutputDeserializer = localHiveOp.getConf().getScriptOutputInfo()
-        .getDeserializerClass().newInstance()
-    scriptOutputDeserializer.initialize(localHconf, localHiveOp.getConf()
-        .getScriptOutputInfo().getProperties())
-
-    scriptInputSerializer = localHiveOp.getConf().getScriptInputInfo().getDeserializerClass()
-        .newInstance().asInstanceOf[Serializer]
-    scriptInputSerializer.initialize(
-        localHconf, localHiveOp.getConf().getScriptInputInfo().getProperties())
+    PartitionProcessor.executeProcessPartition(partitionProcessor, inputRdd, this.toString(), objectInspectors.toString())
   }
 
   /**
    * Generate the command and the environmental variables for running the
    * script. This is called on the master.
    */
-  def getCommandAndEnvs(): (Seq[String], Map[String, String]) = {
+  private def getCommandAndEnvs(): (Seq[String], Map[String, String]) = {
 
     val scriptOpHelper = new ScriptOperatorHelper(new HiveScriptOperator)
-    alias = scriptOpHelper.getAlias
+    val alias = scriptOpHelper.getAlias
 
     val cmdArgs = HiveScriptOperator.splitArgs(hiveOp.getConf().getScriptCmd())
     val prog = cmdArgs(0)
@@ -203,13 +110,10 @@ class ScriptOperator extends UnaryOperator[HiveScriptOperator] {
     (wrappedCmdArgs, Map.empty ++ envs)
   }
 
-  override def processPartition(split: Int, iter: Iterator[_]): Iterator[_] =
-    throw new UnsupportedOperationException
-
   /**
    * Wrap the script in a wrapper that allows admins to control.
    */
-  def addWrapper(inArgs: Array[String]): Array[String] = {
+  private def addWrapper(inArgs: Array[String]): Array[String] = {
     val wrapper = HiveConf.getVar(hconf, HiveConf.ConfVars.SCRIPTWRAPPER)
     if (wrapper == null) {
       inArgs
@@ -218,16 +122,104 @@ class ScriptOperator extends UnaryOperator[HiveScriptOperator] {
       Array.concat(wrapComponents, inArgs)
     }
   }
-
-  def serializeForScript[T](iter: Iterator[T]): Iterator[Writable] =
-    iter.map { row => scriptInputSerializer.serialize(row, objectInspector) }
-
-  def deserializeFromScript(iter: Iterator[Writable]): Iterator[_] =
-    iter.map { row => scriptOutputDeserializer.deserialize(row) }
 }
 
 object ScriptOperator {
+  class ScriptPartitionProcessor(
+      private val conf: ScriptDesc, //TODO: Make sure everything in ScriptDesc is actually serializable.  It should be.
+      private val hconf: SerializableHiveConf,
+      private val objectInspector: SerializableObjectInspector[ObjectInspector],
+      private val command: Seq[String],
+      private val envs: Map[String, String]
+      )
+      extends PartitionProcessor {
+    override def processPartition(split: Int, part: Iterator[_]): Iterator[_] = {
+      //FIXME: Rename part -> iter
+      // Serialize the data so it is recognizable by the script.
+      val iter = serializeForScript(part)
 
+      val outRecordReaderClass: Class[_ <: RecordReader] = conf.getOutRecordReaderClass()
+      val inRecordWriterClass: Class[_ <: RecordWriter] = conf.getInRecordWriterClass()
+      
+      // Rebuild the command to specify paths on each node.
+      // For example, if the command is "python test.py data.dat", the following can turn
+      // it into "python /path/to/workdir/test.py /path/to/workdir/data.dat".
+      val workingDir = System.getProperty("user.dir")
+      val newCmd = command.map { arg =>
+        val uploadedFile = SparkFiles.get(arg)
+        if (new File(uploadedFile).exists()) {
+          uploadedFile
+        } else {
+          arg
+        }
+      }
+      val pb = new ProcessBuilder(newCmd.toSeq)
+      pb.directory(new File(workingDir))
+      // Add the environmental variables to the process.
+      val currentEnvVars = pb.environment()
+      envs.foreach { case(variable, value) => currentEnvVars.put(variable, value) }
+
+      val proc = pb.start()
+
+      // Get the thread local SparkEnv so we can pass it into the new thread.
+      val sparkEnv = SparkEnv.get
+
+      // Start a thread to print the process's stderr to ours
+      new Thread("stderr reader for " + command) {
+        override def run() {
+          for(line <- Source.fromInputStream(proc.getErrorStream).getLines) {
+            System.err.println(line)
+          }
+        }
+      }.start()
+
+      // Start a thread to feed the process input from our parent's iterator
+      new Thread("stdin writer for " + command) {
+        override def run() {
+          // Set the thread local SparkEnv.
+          SparkEnv.set(sparkEnv)
+          val recordWriter = inRecordWriterClass.newInstance
+          recordWriter.initialize(proc.getOutputStream, hconf.value)
+          for(elem <- iter) {
+            recordWriter.write(elem)
+          }
+          recordWriter.close()
+        }
+      }.start()
+
+      // Return an iterator that reads outputs from RecordReader. Use our own
+      // BinaryRecordReader if necessary because Hive's has a bug (see below).
+      val recordReader: RecordReader =
+        if (outRecordReaderClass == classOf[org.apache.hadoop.hive.ql.exec.BinaryRecordReader]) {
+          new ScriptOperator.CustomBinaryRecordReader
+        } else {
+          outRecordReaderClass.newInstance
+        }
+      recordReader.initialize(
+        proc.getInputStream,
+        hconf.value,
+        conf.getScriptOutputInfo().getProperties())
+
+      deserializeFromScript(new ScriptOperator.RecordReaderIterator(recordReader))
+    }
+    
+    private def serializeForScript[T](iter: Iterator[T]): Iterator[Writable] = {
+      val scriptInputSerializer = conf.getScriptInputInfo().getDeserializerClass()
+        .newInstance().asInstanceOf[Serializer]
+      scriptInputSerializer.initialize(
+        hconf.value, conf.getScriptInputInfo().getProperties())
+      iter.map { row => scriptInputSerializer.serialize(row, objectInspector.value) }
+    }
+    
+    private def deserializeFromScript(iter: Iterator[Writable]): Iterator[_] = {
+      val scriptOutputDeserializer = conf.getScriptOutputInfo()
+          .getDeserializerClass().newInstance()
+      scriptOutputDeserializer.initialize(
+          hconf.value, conf.getScriptOutputInfo().getProperties())
+      iter.map { row => scriptOutputDeserializer.deserialize(row) }
+    }
+  }
+  
   /**
    * An iterator that wraps around a Hive RecordReader.
    */

@@ -26,36 +26,39 @@ import org.apache.hadoop.hive.ql.exec.{FileSinkOperator => HiveFileSinkOperator}
 
 
 /**
- * File sink operator. It can accomplish one of the three things:
+ * A sink operator. It can accomplish one of the three things:
  * - write query output to disk
  * - cache query output
  * - return query as RDD directly (without materializing it)
  */
-class TerminalOperator extends UnaryOperator[HiveFileSinkOperator] {
+trait TerminalOperator extends UnaryOperator[HiveFileSinkOperator] {
 
   // Create a local copy of hconf and hiveSinkOp so we can XML serialize it.
-  @BeanProperty var localHiveOp: HiveFileSinkOperator = _
-  @BeanProperty var localHconf: HiveConf = _
-  @BeanProperty val now = new Date()
+//  @BeanProperty var localHiveOp: HiveFileSinkOperator = _
+//  @BeanProperty var localHconf: HiveConf = _
+//  @BeanProperty val now = new Date()
 
-  override def initializeOnMaster() {
-    localHconf = super.hconf
-    // Set parent to null so we won't serialize the entire query plan.
-    hiveOp.setParentOperators(null)
-    hiveOp.setChildOperators(null)
-    hiveOp.setInputObjInspectors(null)
-    localHiveOp = hiveOp
-  }
-
-  override def initializeOnSlave() {
-    localHiveOp.initialize(localHconf, Array(objectInspector))
-  }
-
-  override def processPartition(split: Int, iter: Iterator[_]): Iterator[_] = iter
+//  override def initialize() {
+//    localHconf = super.hconf
+//    // Set parent to null so we won't serialize the entire query plan.
+//    hiveOp.setParentOperators(null)
+//    hiveOp.setChildOperators(null)
+//    hiveOp.setInputObjInspectors(null)
+//    localHiveOp = hiveOp
+//  }
+//
+//  //FIXME
+//  override def initializeOnSlave() {
+//    localHiveOp.initialize(localHconf, Array(objectInspector))
+//  }
+//
+//  override def makePartitionProcessor() = PartitionProcessor.identity
 }
 
 
 /**
  * Collect the output as a TableRDD.
  */
-class TableRddSinkOperator extends TerminalOperator {}
+class TableRddSinkOperator extends SimpleUnaryOperator[HiveFileSinkOperator] with TerminalOperator {
+  override def makePartitionProcessor() = PartitionProcessor.identity
+}

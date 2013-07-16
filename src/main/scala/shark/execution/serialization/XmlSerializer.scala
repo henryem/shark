@@ -19,15 +19,13 @@ package shark.execution.serialization
 
 import java.beans.{XMLDecoder, XMLEncoder, PersistenceDelegate}
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, ObjectOutput, ObjectInput}
-
 import com.ning.compress.lzf.{LZFEncoder, LZFDecoder}
-
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.hive.ql.exec.Utilities.EnumDelegate
 import org.apache.hadoop.hive.ql.plan.GroupByDesc
 import org.apache.hadoop.hive.ql.plan.PlanUtils.ExpressionTypes
-
 import shark.{SharkConfVars, SharkEnvSlave}
+import org.apache.hadoop.hive.conf.HiveConf
 
 
 /**
@@ -39,7 +37,7 @@ object XmlSerializer {
   val COMPRESSION_ENABLED: Byte = 1
   val COMPRESSION_DISABLED: Byte = 0
 
-  def serialize[T](o: T, conf: Configuration): Array[Byte] = {
+  def serialize[T](o: T, useCompression: Boolean): Array[Byte] = {
     val byteStream = new ByteArrayOutputStream()
     val e = new XMLEncoder(byteStream)
     // workaround for java 1.5
@@ -48,15 +46,18 @@ object XmlSerializer {
     e.writeObject(o)
     e.close()
 
-    val useCompression = conf match {
-      case null => SharkConfVars.COMPRESS_QUERY_PLAN.defaultBoolVal
-      case _ => SharkConfVars.getBoolVar(conf, SharkConfVars.COMPRESS_QUERY_PLAN)
-    }
-
     if (useCompression) {
       COMPRESSION_ENABLED +: LZFEncoder.encode(byteStream.toByteArray())
     } else {
       COMPRESSION_DISABLED +: byteStream.toByteArray
+    }
+  }
+  
+  //TODO: Document.
+  def getUseCompression(conf: Configuration): Boolean = {
+    conf match {
+      case null => SharkConfVars.COMPRESS_QUERY_PLAN.defaultBoolVal
+      case _ => SharkConfVars.getBoolVar(conf, SharkConfVars.COMPRESS_QUERY_PLAN)
     }
   }
 

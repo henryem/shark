@@ -21,11 +21,7 @@ import org.apache.hadoop.hive.ql.exec.{LateralViewForwardOperator => HiveLateral
 
 import spark.RDD
 
-class LateralViewForwardOperator extends UnaryOperator[HiveLateralViewForwardOperator] {
-
+class LateralViewForwardOperator extends Operator[HiveLateralViewForwardOperator] with UnaryOperator[HiveLateralViewForwardOperator] {
   override def execute(): RDD[_] = executeParents().head._2
-
-  override def processPartition(split: Int, iter: Iterator[_]) = iter
-
 }
 

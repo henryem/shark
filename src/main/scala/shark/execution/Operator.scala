@@ -18,36 +18,26 @@
 package shark.execution
 
 import java.util.{List => JavaList}
-
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.JavaConversions._
-
 import org.apache.hadoop.hive.conf.HiveConf
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
-
 import shark.LogHelper
-import shark.execution.serialization.OperatorSerializationWrapper
-
 import spark.RDD
+import shark.execution.serialization.SerializableWritable
 
 
-abstract class Operator[T <: HiveOperator] extends LogHelper with Serializable {
-
-  /**
-   * Initialize the operator on master node. This can have dependency on other
-   * nodes. When an operator's initializeOnMaster() is invoked, all its parents'
-   * initializeOnMaster() have been invoked.
-   */
-  def initializeOnMaster() {}
-
+trait Operator[T <: HiveOperator] extends LogHelper with Serializable {
   /**
    * Initialize the operator on slave nodes. This method should have no
    * dependency on parents or children. Everything that is not used in this
    * method should be marked @transient.
    */
-  def initializeOnSlave() {}
+  //TODO: Remove
+//  def initializeOnSlave() {}
 
-  def processPartition(split: Int, iter: Iterator[_]): Iterator[_]
+  //TODO: Remove.
+//  def processPartition(split: Int, iter: Iterator[_]): Iterator[_]
 
   /**
    * Execute the operator. This should recursively execute parent operators.
@@ -61,7 +51,6 @@ abstract class Operator[T <: HiveOperator] extends LogHelper with Serializable {
   def initializeMasterOnAll() {
     _parentOperators.foreach(_.initializeMasterOnAll())
     objectInspectors ++= hiveOp.getInputObjInspectors()
-    initializeOnMaster()
   }
 
   /**
@@ -71,6 +60,7 @@ abstract class Operator[T <: HiveOperator] extends LogHelper with Serializable {
   def getTag: Int = 0
 
   def hconf = Operator.hconf
+  def hconfWrapper = Operator.hconfWrapper
 
   def childOperators = _childOperators
   def parentOperators = _parentOperators
@@ -119,23 +109,28 @@ abstract class Operator[T <: HiveOperator] extends LogHelper with Serializable {
 
 /**
  * A base operator class that has many parents and one child. This can be used
- * to implement join, union, etc. Operators implementations should override the
+ * to implement join, union, etc. Operator implementations should override the
  * following methods:
  *
  * combineMultipleRdds: Combines multiple RDDs into a single RDD. E.g. in the
  * case of join, this function does the join operation.
  *
- * processPartition: Called on each slave on the output of combineMultipleRdds.
- * This can be used to transform rows into their desired format.
+ * makePartitionProcessor: Called on the master. The result will be serialized
+ * and sent to each slave, where it will be used to transform each partition
+ * of the output of combineMultipleRdds.
  *
  * postprocessRdd: Called on the master to transform the output of
  * processPartition before sending it downstream.
  *
  */
-abstract class NaryOperator[T <: HiveOperator] extends Operator[T] {
+abstract class SimpleNaryOperator[T <: HiveOperator] extends Operator[T] with NaryOperator[T] {
 
-  /** Process a partition. Called on slaves. */
-  def processPartition(split: Int, iter: Iterator[_]): Iterator[_]
+  /** 
+   * Make a PartitionProcessor for this operator.  This processor's
+   * processPartition method will be mapped over the partitions of the input
+   * RDD for this operator to produce the output RDD.
+   */
+  def makePartitionProcessor(): PartitionProcessor
 
   /** Called on master. */
   def combineMultipleRdds(rdds: Seq[(Int, RDD[_])]): RDD[_]
@@ -143,14 +138,17 @@ abstract class NaryOperator[T <: HiveOperator] extends Operator[T] {
   /** Called on master. */
   def postprocessRdd(rdd: RDD[_]): RDD[_] = rdd
 
-  override def execute(): RDD[_] = {
+  override final def execute(): RDD[_] = {
     val inputRdds = executeParents()
     val singleRdd = combineMultipleRdds(inputRdds)
-    val rddProcessed = Operator.executeProcessPartition(this, singleRdd)
+    val rddProcessed = PartitionProcessor.executeProcessPartition(makePartitionProcessor(), singleRdd, this.toString(), objectInspectors.toString())
     postprocessRdd(rddProcessed)
   }
 
 }
+
+/** Marker trait for operators with many parents and one or fewer children. */
+trait NaryOperator[T <: HiveOperator] extends Operator[T]
 
 
 /**
@@ -161,21 +159,28 @@ abstract class NaryOperator[T <: HiveOperator] extends Operator[T] {
  * passing it to processPartition. For example, the operator can use this
  * function to sort the input.
  *
- * processPartition: Called on each slave on the output of preprocessRdd.
- * This can be used to transform rows into their desired format.
+ * makePartitionProcessor: Called on the master. The result will be serialized
+ * and sent to each slave, where it will be used to transform each partition
+ * of the output of preprocessRdd.
  *
  * postprocessRdd: Called on the master to transform the output of
  * processPartition before sending it downstream.
  *
  */
-abstract class UnaryOperator[T <: HiveOperator] extends Operator[T] {
+abstract class SimpleUnaryOperator[T <: HiveOperator] extends Operator[T] with UnaryOperator[T] {
 
-  /** Process a partition. Called on slaves. */
-  def processPartition(split: Int, iter: Iterator[_]): Iterator[_]
+  /** 
+   * Make a PartitionProcessor for this operator.  This processor's
+   * processPartition method will be mapped over the partitions of the input
+   * RDD for this operator to produce the output RDD.
+   */
+  def makePartitionProcessor(): PartitionProcessor
 
+  //TODO: Not clear if this is needed, and it's a little messy.
   /** Called on master. */
   def preprocessRdd(rdd: RDD[_]): RDD[_] = rdd
 
+  //TODO: Not clear if this is needed, and it's a little messy.
   /** Called on master. */
   def postprocessRdd(rdd: RDD[_]): RDD[_] = rdd
 
@@ -186,38 +191,28 @@ abstract class UnaryOperator[T <: HiveOperator] extends Operator[T] {
   override def execute(): RDD[_] = {
     val inputRdd = if (parentOperators.size == 1) executeParents().head._2 else null
     val rddPreprocessed = preprocessRdd(inputRdd)
-    val rddProcessed = Operator.executeProcessPartition(this, rddPreprocessed)
+    val rddProcessed = PartitionProcessor.executeProcessPartition(makePartitionProcessor(), rddPreprocessed, this.toString(), objectInspectors.toString())
     postprocessRdd(rddProcessed)
   }
 }
 
+/** Marker trait for operators with one parent and one or fewer children. */
+trait UnaryOperator[T <: HiveOperator] extends Operator[T]
 
-abstract class TopOperator[T <: HiveOperator] extends UnaryOperator[T]
+/** Marker trait for operators with no parents. */
+trait TopOperator[T <: HiveOperator] extends Operator[T]
 
 
 object Operator extends LogHelper {
 
   /** A reference to HiveConf for convenience. */
-  @transient var hconf: HiveConf = _
-
-  /**
-   * Calls the code to process the partitions. It is placed here because we want
-   * to do logging, but calling logging automatically adds a reference to the
-   * operator (which is not serializable by Java) in the Spark closure.
-   */
-  def executeProcessPartition(operator: Operator[_ <: HiveOperator], rdd: RDD[_]): RDD[_] = {
-    val op = OperatorSerializationWrapper(operator)
-    rdd.mapPartitionsWithIndex { case(split, partition) =>
-      op.logDebug("Started executing mapPartitions for operator: " + op)
-      op.logDebug("Input object inspectors: " + op.objectInspectors)
-
-      op.initializeOnSlave()
-      val newPart = op.processPartition(split, partition)
-      op.logDebug("Finished executing mapPartitions for operator: " + op)
-
-      newPart
-    }
+  //TODO: Remove.
+//  var hconf: HiveConf = _
+  @transient private var _hconf: SerializableWritable[HiveConf] = _
+  def hconf = _hconf.value
+  def hconf_=(newHconf: HiveConf) {
+    _hconf = new SerializableWritable(newHconf)
   }
-
+  def hconfWrapper = _hconf
 }
 

@@ -26,15 +26,13 @@ import shark.SharkEnv
 import spark.RDD
 
 
-class LimitOperator extends UnaryOperator[HiveLimitOperator] {
-
-  // Only works on the master program.
+class LimitOperator extends Operator[HiveLimitOperator] with UnaryOperator[HiveLimitOperator] {
+  //HACK: Currently ExtractOperator relies on this, so it is exposed as public.
+  // The code should be refactored so that this can be made private.
   def limit = hiveOp.getConf().getLimit()
-
+  
   override def execute(): RDD[_] = {
-
-    val limitNum = hiveOp.getConf().getLimit()
-
+    val limitNum = limit
     if (limitNum > 0) {
       // Take limit on each partition.
       val inputRdd = executeParents().head._2
@@ -42,10 +40,6 @@ class LimitOperator extends UnaryOperator[HiveLimitOperator] {
     } else {
       new EmptyRDD(SharkEnv.sc)
     }
-  }
-
-  override def processPartition(split: Int, iter: Iterator[_]) = {
-    throw new UnsupportedOperationException("LimitOperator.processPartition()")
   }
 }
 

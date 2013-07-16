@@ -29,7 +29,9 @@ object SerializableWritable {
 
 
 class SerializableWritable[T <: Writable](@transient var t: T) extends Serializable {
-  def value = if (t == null) NullWritable.get else t
+  //TODO: Previously this was NullWritable.get when t was null, instead of just null.  That
+  // screwed with static typing.  WTF?
+  def value: T = t
 
   override def toString = t.toString
 

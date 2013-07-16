@@ -43,12 +43,15 @@ import spark.rdd.{PartitionPruningRDD, UnionRDD}
 import org.apache.hadoop.hive.ql.io.HiveInputFormat
 
 
-class TableScanOperator extends TopOperator[HiveTableScanOperator] with HiveTopOperator {
+class TableScanOperator extends SimpleUnaryOperator[HiveTableScanOperator] with TopOperator[HiveTableScanOperator] with HiveTopOperator {
 
+  // Set in SparkTask.execute().
   @transient var table: Table = _
 
   @transient var parts: Array[Object] = _
+  // Set in SparkTask.execute().
   @BeanProperty var firstConfPartDesc: PartitionDesc  = _
+  // Set in SparkTask.execute().
   @BeanProperty var tableDesc: TableDesc = _
   @BeanProperty var localHconf: HiveConf = _
 
@@ -229,7 +232,7 @@ class TableScanOperator extends TopOperator[HiveTableScanOperator] with HiveTopO
         .asInstanceOf[java.lang.Class[InputFormat[Writable, Writable]]]
       val parts = createHadoopRdd(tablePath, ifc)
 
-      val serializedHconf = XmlSerializer.serialize(localHconf, localHconf)
+      val serializedHconf = XmlSerializer.serialize(localHconf, XmlSerializer.getUseCompression(localHconf))
       val partRDD = parts.mapPartitions { iter =>
         // Map each tuple to a row object
         val hconf = XmlSerializer.deserialize(serializedHconf).asInstanceOf[HiveConf]

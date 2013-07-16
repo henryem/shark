@@ -20,6 +20,9 @@ package shark.execution
 import org.apache.hadoop.hive.ql.exec.{GroupByOperator => HiveGroupByOperator}
 import org.apache.hadoop.hive.ql.exec.{ReduceSinkOperator => HiveReduceSinkOperator}
 import org.apache.hadoop.hive.ql.plan.GroupByDesc
+import org.apache.hadoop.hive.ql.udf.generic.GenericUDAFEvaluator.AggregationBuffer
+import org.apache.hadoop.hive.ql.exec.ExprNodeEvaluator
+import org.apache.hadoop.hive.ql.udf.generic.GenericUDAFEvaluator
 
 
 /**
@@ -29,7 +32,7 @@ import org.apache.hadoop.hive.ql.plan.GroupByDesc
  *
  * These two classes are defined in org.apache.hadoop.hive.ql.exec package
  * (scala files) to get around the problem that some Hive classes are only
- * visibile within that class.
+ * visible within that class.
  */
 object GroupByOperator {
   
@@ -37,5 +40,37 @@ object GroupByOperator {
     op.getParentOperators().get(0).isInstanceOf[HiveReduceSinkOperator]
   }
   
+  @inline final def aggregateNewKey(
+      row: Object,
+      aggregations: Array[AggregationBuffer],
+      aggregationEvals: Array[GenericUDAFEvaluator],
+      aggregationParameterFields: Array[Array[ExprNodeEvaluator]]) {
+    var i = 0
+        while (i < aggregations.length) {
+          aggregationEvals(i).aggregate(
+              aggregations(i), aggregationParameterFields(i).map(_.evaluate(row)))
+              i += 1
+        }
+  }
+
+  @inline final def aggregateExistingKey(
+      row: AnyRef,
+      aggregations: Array[AggregationBuffer],
+      aggregationIsDistinct: Array[Boolean],
+      aggregationEvals: Array[GenericUDAFEvaluator],
+      aggregationParameterFields: Array[Array[ExprNodeEvaluator]]) {
+    var i = 0
+        while (i < aggregations.length) {
+          if (!aggregationIsDistinct(i)) {
+            aggregationEvals(i).aggregate(
+                aggregations(i), aggregationParameterFields(i).map(_.evaluate(row)))
+          }
+          i += 1
+        }
+  }
+
+  def newAggregations(aggregationEvals: Array[GenericUDAFEvaluator]): Array[AggregationBuffer] = {
+      aggregationEvals.map(eval => eval.getNewAggregationBuffer)
+  }
 }
 

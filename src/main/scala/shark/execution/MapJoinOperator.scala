@@ -32,7 +32,7 @@ import org.apache.hadoop.io.BytesWritable
 
 import shark.SharkEnv
 import shark.SharkEnvSlave
-import shark.execution.serialization.{OperatorSerializationWrapper, SerializableWritable}
+import shark.execution.serialization.{SerializableWritable}
 import spark.RDD
 import spark.broadcast.Broadcast
 
@@ -45,7 +45,8 @@ import spark.broadcast.Broadcast
  * Different from Hive, we don't spill the hash tables to disk. If the "small"
  * tables are too big to fit in memory, the normal join should be used anyway.
  */
-class MapJoinOperator extends CommonJoinOperator[MapJoinDesc, HiveMapJoinOperator] {
+//FIXME: Extend HiveTopOperator?
+class MapJoinOperator extends Operator[HiveMapJoinOperator] with NaryOperator[HiveMapJoinOperator] {
 
   @BeanProperty var posBigTable: Int = _
   @BeanProperty var bigTableAlias: Int = _
