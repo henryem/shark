@@ -21,24 +21,24 @@ import java.util.{List => JavaList}
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.JavaConversions._
 import org.apache.hadoop.hive.conf.HiveConf
+import org.apache.hadoop.hive.ql.exec.{Operator => HiveOp}
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
 import shark.LogHelper
 import spark.RDD
 import shark.execution.serialization.SerializableWritable
+import shark.execution.serialization.SerializableHiveOperator
+import shark.execution.serialization.SerializedHiveOperator
+import shark.execution.serialization.XmlSerializer
+import shark.execution.serialization.SerializableObjectInspector
+import shark.execution.serialization.SerializableObjectInspectors
 
 
-trait Operator[T <: HiveOperator] extends LogHelper with Serializable {
-  /**
-   * Initialize the operator on slave nodes. This method should have no
-   * dependency on parents or children. Everything that is not used in this
-   * method should be marked @transient.
-   */
-  //TODO: Remove
-//  def initializeOnSlave() {}
-
-  //TODO: Remove.
-//  def processPartition(split: Int, iter: Iterator[_]): Iterator[_]
-
+trait Operator[T <: HiveOp[_]] extends LogHelper with Serializable {
+  private var _hiveOp: SerializedHiveOperator[T] = _
+  private val _childOperators = new ArrayBuffer[Operator[_]]()
+  private val _parentOperators = new ArrayBuffer[Operator[_]]()
+  private var _objectInspectors: SerializableObjectInspectors[ObjectInspector] = new SerializableObjectInspectors(Array.empty)
+  
   /**
    * Execute the operator. This should recursively execute parent operators.
    */
@@ -50,7 +50,7 @@ trait Operator[T <: HiveOperator] extends LogHelper with Serializable {
    */
   def initializeMasterOnAll() {
     _parentOperators.foreach(_.initializeMasterOnAll())
-    objectInspectors ++= hiveOp.getInputObjInspectors()
+    _objectInspectors = new SerializableObjectInspectors(_objectInspectors.value ++ hiveOp.getInputObjInspectors())
   }
 
   /**
@@ -60,7 +60,13 @@ trait Operator[T <: HiveOperator] extends LogHelper with Serializable {
   def getTag: Int = 0
 
   def hconf = Operator.hconf
-  def hconfWrapper = Operator.hconfWrapper
+  
+  def hiveOp: T = _hiveOp.value
+  def hiveOp_=(newHiveOp: T) {
+    _hiveOp = SerializedHiveOperator.serialize(newHiveOp, XmlSerializer.getUseCompression(hconf))
+  }
+  
+  def objectInspectors = _objectInspectors.value
 
   def childOperators = _childOperators
   def parentOperators = _parentOperators
@@ -95,11 +101,6 @@ trait Operator[T <: HiveOperator] extends LogHelper with Serializable {
       _parentOperators.flatMap(_.returnTopOperators())
     }
   }
-
-  @transient var hiveOp: T = _
-  @transient private val _childOperators = new ArrayBuffer[Operator[_]]()
-  @transient private val _parentOperators = new ArrayBuffer[Operator[_]]()
-  @transient var objectInspectors = new ArrayBuffer[ObjectInspector]
 
   protected def executeParents(): Seq[(Int, RDD[_])] = {
     parentOperators.map(p => (p.getTag, p.execute()))
@@ -207,12 +208,12 @@ object Operator extends LogHelper {
 
   /** A reference to HiveConf for convenience. */
   //TODO: Remove.
+  //FIXME: Replace with a default-constructed HiveConf.
 //  var hconf: HiveConf = _
   @transient private var _hconf: SerializableWritable[HiveConf] = _
   def hconf = _hconf.value
   def hconf_=(newHconf: HiveConf) {
     _hconf = new SerializableWritable(newHconf)
   }
-  def hconfWrapper = _hconf
 }
 

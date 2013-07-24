@@ -43,7 +43,6 @@ class LateralViewJoinOperator extends Operator[HiveLateralViewJoinOperator] with
   override def execute: RDD[_] = {
     // Execute LateralViewForwardOperator, bypassing Select / UDTF - Select
     // branches (see diagram in Hive's).
-    val inputRDD = lvfOp.execute()
     val conf = parentOperators.filter(_.isInstanceOf[UDTFOperator]).head
       .parentOperators.head.asInstanceOf[SelectOperator].hiveOp.getConf()
     val udtfOp = parentOperators.filter(_.isInstanceOf[UDTFOperator]).head.asInstanceOf[UDTFOperator]
@@ -55,6 +54,7 @@ class LateralViewJoinOperator extends Operator[HiveLateralViewJoinOperator] with
         udtfOp.makePartitionProcessor(),
         new SerializableObjectInspectors(lvfOp.objectInspectors.toArray))
     
+    val inputRDD = lvfOp.execute()
     PartitionProcessor.executeProcessPartition(partitionProcessor, inputRDD, this.toString(), this.objectInspectors.toString())
   }
 }

@@ -28,9 +28,14 @@ import spark.RDD
 import shark.execution.serialization.SerializableWritable
 import shark.execution.serialization.SerializableHiveConf
 import shark.execution.serialization.XmlSerializer
+import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
+import shark.execution.serialization.SerializableObjectInspector
 
 
-class ExtractOperator extends SimpleUnaryOperator[HiveExtractOperator] with HiveTopOperator {
+class ExtractOperator extends SimpleUnaryOperator[HiveExtractOperator] with HiveTopOperator[HiveExtractOperator] {
+  private val inputObjectInspectors = new scala.collection.mutable.HashMap[Int, SerializableObjectInspector[ObjectInspector]]
+  private val keyValueTableDescs = new scala.collection.mutable.HashMap[Int, (TableDesc, TableDesc)]
+  
   override def preprocessRdd(rdd: RDD[_]): RDD[_] = {
     // TODO: hasOrder and limit should really be made by optimizer.
     val hasOrder = parentOperator match {
@@ -101,6 +106,18 @@ class ExtractOperator extends SimpleUnaryOperator[HiveExtractOperator] with Hive
     new ExtractOperator.ExtractOperatorPartitionProcessor(
         valueTableDesc,
         new SerializableHiveConf(hconf, XmlSerializer.getUseCompression(hconf)))
+  }
+  
+  override def initializeHiveTopOperator() {
+    HiveTopOperator.initializeHiveTopOperator(this, inputObjectInspectors.mapValues(_.value).toMap)
+  }
+
+  override def setInputObjectInspector(tag: Int, objectInspector: ObjectInspector) {
+    inputObjectInspectors.put(tag, new SerializableObjectInspector(objectInspector))
+  }
+  
+  override def setKeyValueTableDescs(tag: Int, descs: (TableDesc, TableDesc)) {
+    keyValueTableDescs.put(tag, descs)
   }
 }
 

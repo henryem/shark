@@ -68,14 +68,14 @@ class ReduceSinkOperator extends SimpleUnaryOperator[HiveReduceSinkOperator] {
     // Propagate the output object inspector and serde infos to downstream operator.
     childOperators.foreach { child =>
       child match {
-        case child: HiveTopOperator => {
+        case child: HiveTopOperator[_] => {
           child.setInputObjectInspector(joinTag, outputObjInspector)
           child.setKeyValueTableDescs(joinTag,
               (conf.getKeySerializeInfo, conf.getValueSerializeInfo))
         }
         case _ => {
           throw new HiveException("%s's downstream operator should be %s. %s found.".format(
-            this.getClass.getName, classOf[HiveTopOperator].getName, child.getClass.getName))
+            this.getClass.getName, classOf[HiveTopOperator[_]].getName, child.getClass.getName))
         }
       }
     }

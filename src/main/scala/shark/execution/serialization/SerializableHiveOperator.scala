@@ -15,12 +15,11 @@ import javax.annotation.concurrent.NotThreadSafe
  * using the operator while it is being serialized.  Serializing greedily
  * makes it easier to do this.
  * 
- * TODO: Document locking scheme and cache the deserialized form.  For now,
- * calling .value multiple times should be avoided.
+ * TODO: Document locking scheme.
  */
-class SerializedHiveOperator[T <: Serializable] private (private val opBytes: Array[Byte])
+class SerializedHiveOperator[T <: Operator[_]] private (private val opBytes: Array[Byte])
     extends Serializable {
-  def value: Operator[T] = SerializationUtils.deserialize(opBytes).asInstanceOf[SerializableHiveOperator[T]].value
+  @transient lazy val value: T = SerializationUtils.deserialize(opBytes).asInstanceOf[SerializableHiveOperator[T]].value
 }
 
 object SerializedHiveOperator {
@@ -29,7 +28,7 @@ object SerializedHiveOperator {
   //TODO: Document.  Callers need to hold this.lock when using @hiveOp if it
   // might currently be getting serialized.
   @NotThreadSafe
-  def serialize[T <: Serializable](hiveOp: Operator[T], useCompression: Boolean): SerializedHiveOperator[T] = {
+  def serialize[T <: Operator[_]](hiveOp: T, useCompression: Boolean): SerializedHiveOperator[T] = {
     val opBytes = lock.synchronized {
       SerializationUtils.serialize(new SerializableHiveOperator(hiveOp, useCompression))
     }
@@ -50,8 +49,8 @@ object SerializedHiveOperator {
  * TODO: This might need to be a global lock, since operators might interact
  * with each other in ways that make it difficult to hold all of their locks.
  */
-class SerializableHiveOperator[T <: Serializable](
-    private var hiveOp: Operator[T],
+class SerializableHiveOperator[T <: Operator[_]](
+    private var hiveOp: T,
     private var useCompression: Boolean)
     extends Serializable {
   
@@ -75,7 +74,7 @@ class SerializableHiveOperator[T <: Serializable](
   
   private def readObject(in: ObjectInputStream) {
     in.defaultReadObject()
-    hiveOp = in.readObject().asInstanceOf[Operator[T]]
+    hiveOp = in.readObject().asInstanceOf[T]
     val inputObjectInspectors = in.readObject().asInstanceOf[SerializableObjectInspectors[ObjectInspector]].value
     hiveOp.setInputObjInspectors(inputObjectInspectors)
   }
@@ -86,8 +85,8 @@ class SerializableHiveOperator[T <: Serializable](
  * serializable fields.  In particular, the operator should not include any
  * ObjectInspectors, as those are not XML-serializable.
  */
-class SerializableOiFreeOperator[T <: Serializable](
-    private var op: Operator[T],
+class SerializableOiFreeOperator[T <: Operator[_]](
+    private var op: T,
     private var useCompression: Boolean)
     extends Serializable {
   def value = op

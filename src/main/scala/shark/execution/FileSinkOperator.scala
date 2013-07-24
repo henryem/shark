@@ -21,7 +21,7 @@ import scala.reflect.BeanProperty
 import org.apache.hadoop.fs.FileSystem
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.hive.conf.HiveConf
-import org.apache.hadoop.hive.ql.exec.{FileSinkOperator => HiveFileSinkOperator}
+import org.apache.hadoop.hive.ql.exec.{Operator => HiveOp, FileSinkOperator => HiveFileSinkOperator}
 import org.apache.hadoop.hive.ql.exec.JobCloseFeedBack
 import org.apache.hadoop.mapred.TaskID
 import org.apache.hadoop.mapred.TaskAttemptID
@@ -79,7 +79,7 @@ class FileSinkOperator extends Operator[HiveFileSinkOperator] with TerminalOpera
 
 object FileSinkOperator {
   private class FileSinkPartitionProcessor(
-      private val serializedHiveOp: SerializedHiveOperator[FileSinkDesc],
+      private val serializedHiveOp: SerializedHiveOperator[HiveFileSinkOperator],
       private val hiveConf: SerializableHiveConf,
       private val now: Date,
       private val outputFileExtension: String,

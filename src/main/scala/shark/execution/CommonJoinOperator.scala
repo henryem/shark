@@ -94,6 +94,7 @@ import shark.execution.serialization.SerializableHiveConf
 
 /**
  * Some state used in remote computation in various join operators.
+ * Note: Instantiating this is inexpensive.
  */
 //TODO: Check whether @transient lazy vals work with Kryo serialization.
 class CommonJoinPartitionProcessingState[JOINDESCTYPE <: JoinDesc](

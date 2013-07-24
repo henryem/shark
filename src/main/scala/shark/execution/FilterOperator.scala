@@ -29,6 +29,11 @@ import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
 
 
 class FilterOperator extends SimpleUnaryOperator[HiveFilterOperator] {
+  //HACK: TableScanOperator currently requires this.  This is horrible.
+  def getExprNodeEvaluator(): ExprNodeEvaluator = {
+    ExprNodeEvaluatorFactory.get(hiveOp.getConf.getPredicate())
+  }
+  
   override def makePartitionProcessor(): PartitionProcessor = {
     new FilterOperator.FilterPartitionProcessor(hiveOp.getConf(), new SerializableObjectInspector(objectInspector))
   }

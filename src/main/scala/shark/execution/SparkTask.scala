@@ -93,7 +93,8 @@ with java.io.Serializable with LogHelper {
 
     val sinkRdd = terminalOp.execute().asInstanceOf[RDD[Any]]
 
-    _tableRdd = new TableRDD(sinkRdd, work.resultSchema, terminalOp.objectInspector)
+    //FIXME: Shouldn't need to cast here.
+    _tableRdd = new TableRDD(sinkRdd, work.resultSchema, terminalOp.asInstanceOf[Operator[_]].objectInspectors.head)
     0
   }
 
@@ -103,36 +104,40 @@ with java.io.Serializable with LogHelper {
 
     // Add table metadata to TableScanOperators
     topOps.foreach { op =>
-      op.table = topToTable.get(op.hiveOp)
-      op.tableDesc = Utilities.getTableDesc(op.table)
-      PlanUtils.configureInputJobPropertiesForStorageHandler(op.tableDesc)
-      if (op.table.isPartitioned) {
+      val table = topToTable.get(op.hiveOp)
+      val tableDesc = Utilities.getTableDesc(table)
+      PlanUtils.configureInputJobPropertiesForStorageHandler(tableDesc)
+      val (parts, firstConfPartDesc): (Option[Array[Partition]], Option[PartitionDesc]) = if (table.isPartitioned) {
         val ppl = PartitionPruner.prune(
-          op.table,
+          table,
           work.pctx.getOpToPartPruner().get(op.hiveOp),
           work.pctx.getConf(), "",
           work.pctx.getPrunedPartitions())
-        op.parts = ppl.getConfirmedPartns.toArray ++ ppl.getUnknownPartns.toArray
-        val allParts = op.parts ++ ppl.getDeniedPartns.toArray
-        if (allParts.size == 0) {
-          op.firstConfPartDesc = new PartitionDesc(op.tableDesc, null)
+        val parts = ppl.getConfirmedPartns.toArray ++ ppl.getUnknownPartns.toArray
+        val allParts = parts ++ ppl.getDeniedPartns.toArray
+        val firstConfPartDesc = if (allParts.size == 0) {
+          new PartitionDesc(tableDesc, null)
         } else {
-          op.firstConfPartDesc = Utilities.getPartitionDesc(allParts(0).asInstanceOf[Partition])
+          Utilities.getPartitionDesc(allParts(0).asInstanceOf[Partition])
         }
+        (Some(parts), Some(firstConfPartDesc))
+      } else {
+        (None, None)
       }
+      op.setTableProperties(table, tableDesc, parts, firstConfPartDesc)
     }
   }
 
   def initializeAllHiveOperators(terminalOp: TerminalOperator) {
     // Need to guarantee all parents are initialized before the child.
-    val topOpList = new scala.collection.mutable.MutableList[HiveTopOperator]
+    val topOpList = new scala.collection.mutable.MutableList[HiveTopOperator[_]]
     val queue = new scala.collection.mutable.Queue[Operator[_]]
     queue.enqueue(terminalOp)
 
     while (!queue.isEmpty) {
       val current = queue.dequeue()
       current match {
-        case op: HiveTopOperator => topOpList += op
+        case op: HiveTopOperator[_] => topOpList += op
         case _ => Unit
       }
       queue ++= current.parentOperators

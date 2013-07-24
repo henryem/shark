@@ -29,33 +29,34 @@ import shark.LogHelper
  * everything that can come after ReduceSink. Note that they might have multiple
  * upstream operators (multiple parents).
  */
-trait HiveTopOperator extends LogHelper {
-  self: Operator[_ <: HiveOperator] =>
-
+trait HiveTopOperator[T <: HiveOperator] extends Operator[T] with LogHelper {
+  def initializeHiveTopOperator()
+  
   /**
-   * Stores the input object inspectors. This is passed down by either the
+   * Stores the input object inspectors. This is called by either the
    * upstream operators (i.e. ReduceSink) or in the case of TableScan, passed
    * by the init code in SparkTask.
-   */
-  @transient
-  val inputObjectInspectors = new scala.collection.mutable.HashMap[Int, ObjectInspector]
-
+   */ 
+  def setInputObjectInspector(tag: Int, objectInspector: ObjectInspector)
+  
   /**
-   * Stores the deser for operators downstream from ReduceSink. This is set by
-   * ReduceSink.initializeDownStreamHiveOperators().
+   * Stores the deser for operators downstream from ReduceSink. This is called
+   * by ReduceSink.initializeDownStreamHiveOperators().
    */
-  @transient
-  val keyValueTableDescs = new scala.collection.mutable.HashMap[Int, (TableDesc, TableDesc)]
+  def setKeyValueTableDescs(tag: Int, descs: (TableDesc, TableDesc))
+}
 
+object HiveTopOperator extends LogHelper {
   /**
-   * Initialize the Hive operator when all input object inspectors are ready.
-   */
-  def initializeHiveTopOperator() {
-    logInfo("Started executing " + self + " initializeHiveTopOperator()")
+   * A default implementation of initializeHiveTopOperator, to be used
+   * optionally by implementors of that trait.
+   */ 
+  def initializeHiveTopOperator[T <: HiveOperator](op: HiveTopOperator[T], inputObjectInspectors: Map[Int, ObjectInspector]) {
+    logInfo("Started executing " + op + " initializeHiveTopOperator()")
 
     // Call initializeDownStreamHiveOperators() of upstream operators that are
     // ReduceSink so we can get the proper input object inspectors and serdes.
-    val reduceSinkParents = self.parentOperators.filter(_.isInstanceOf[ReduceSinkOperator])
+    val reduceSinkParents = op.parentOperators.filter(_.isInstanceOf[ReduceSinkOperator])
     reduceSinkParents.foreach { parent =>
       parent.asInstanceOf[ReduceSinkOperator].initializeDownStreamHiveOperator()
       logInfo("parent : " + parent)
@@ -82,20 +83,10 @@ trait HiveTopOperator extends LogHelper {
 
     if (objectInspectorArray.size > 0) {    
       // Initialize the hive operators. This init propagates downstream.
-      logDebug("Executing " + self.hiveOp + ".initialize()")
-      self.hiveOp.initialize(hconf, objectInspectorArray)
+      logDebug("Executing " + op.hiveOp + ".initialize()")
+      op.hiveOp.initialize(op.hconf, objectInspectorArray)
     }
     
-    logInfo("Finished executing " + self + " initializeHiveTopOperator()")
+    logInfo("Finished executing " + op + " initializeHiveTopOperator()")
   }
-
-  def setInputObjectInspector(tag: Int, objectInspector: ObjectInspector) {
-    inputObjectInspectors.put(tag, objectInspector)
-  }
-  
-  def setKeyValueTableDescs(tag: Int, descs: (TableDesc, TableDesc)) {
-    keyValueTableDescs.put(tag, descs)
-  }
-
 }
-

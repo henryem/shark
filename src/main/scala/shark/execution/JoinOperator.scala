@@ -31,10 +31,27 @@ import shark.execution.serialization.SerializableObjectInspectors
 import spark.{CoGroupedRDD, HashPartitioner, RDD}
 import shark.execution.serialization.SerializableHiveConf
 import shark.execution.serialization.XmlSerializer
+import shark.execution.serialization.SerializableObjectInspector
+import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
 
 
 class JoinOperator extends Operator[HiveJoinOperator] with NaryOperator[HiveJoinOperator]
-  with HiveTopOperator {
+  with HiveTopOperator[HiveJoinOperator] {
+  private val inputObjectInspectors = new scala.collection.mutable.HashMap[Int, SerializableObjectInspector[ObjectInspector]]
+  private val keyValueTableDescs = new scala.collection.mutable.HashMap[Int, (TableDesc, TableDesc)]
+  
+  override def initializeHiveTopOperator() {
+    HiveTopOperator.initializeHiveTopOperator(this, inputObjectInspectors.mapValues(_.value).toMap)
+  }
+
+  override def setInputObjectInspector(tag: Int, objectInspector: ObjectInspector) {
+    inputObjectInspectors.put(tag, new SerializableObjectInspector(objectInspector))
+  }
+  
+  override def setKeyValueTableDescs(tag: Int, descs: (TableDesc, TableDesc)) {
+    keyValueTableDescs.put(tag, descs)
+  }
+  
   override def execute(): RDD[_] = {
     val inputRdds = executeParents()
     combineMultipleRdds(inputRdds)
