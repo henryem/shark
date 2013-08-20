@@ -21,15 +21,13 @@ class SerializableHiveConf(
     extends Serializable {
   def value = hconf
   
-  def readObject(in: ObjectInputStream) {
-    in.defaultReadObject()
+  private def readObject(in: ObjectInputStream) {
     val hconfBytes = in.readObject().asInstanceOf[Array[Byte]]
     hconf = XmlSerializer.deserialize(hconfBytes)
     useCompression = in.readBoolean()
   }
 
-  def writeObject(out: ObjectOutputStream) {
-    out.defaultWriteObject()
+  private def writeObject(out: ObjectOutputStream) {
     val hconfBytes = XmlSerializer.serialize(hconf, useCompression)
     out.writeObject(hconfBytes) //TODO: Can we use write() instead?  Is there overhead from using writeObject()?
     out.writeBoolean(useCompression)

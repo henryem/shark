@@ -20,33 +20,31 @@ package org.apache.hadoop.hive.ql.exec
 // Put this file in Hive's exec package to access package level visible fields and methods.
 
 import java.lang.{Integer => JInteger}
-import java.util.{ArrayList => JArrayList, HashMap => JHashMap, HashSet => JHashSet, Set => JSet, Map => JMap}
+import java.util.{HashMap => JHashMap, HashSet => JHashSet, Set => JSet, Map => JMap}
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.JavaConversions._
-import scala.reflect.BeanProperty
 import org.apache.hadoop.hive.conf.HiveConf
 import org.apache.hadoop.hive.ql.exec.{GroupByOperator => HiveGroupByOperator}
-import org.apache.hadoop.hive.ql.plan.{ExprNodeColumnDesc, TableDesc}
-import org.apache.hadoop.hive.ql.udf.generic.GenericUDAFEvaluator.AggregationBuffer
-import org.apache.hadoop.hive.serde2.objectinspector.{ObjectInspector, ObjectInspectorUtils,
-  StandardStructObjectInspector, StructObjectInspector, UnionObject}
+import org.apache.hadoop.hive.ql.plan.TableDesc
+import org.apache.hadoop.hive.serde2.objectinspector.{ObjectInspector, ObjectInspectorUtils, StructObjectInspector, UnionObject}
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorUtils.ObjectInspectorCopyOption
 import org.apache.hadoop.hive.serde2.Deserializer
-import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoUtils
 import org.apache.hadoop.io.BytesWritable
 import shark.SharkEnv
 import shark.execution._
-import shark.execution.{GroupByOperator => SharkGroupByOperator}
 import spark.{Aggregator, HashPartitioner, RDD}
 import spark.rdd.ShuffledRDD
 import shark.execution.serialization.SerializableObjectInspector
-import shark.SharkEnvSlave
-import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorFactory
-import org.apache.hadoop.hive.ql.plan.AggregationDesc
-import org.apache.hadoop.hive.ql.plan.ExprNodeDesc
 import org.apache.hadoop.hive.ql.plan.GroupByDesc
-import org.apache.hadoop.hive.ql.udf.generic.GenericUDAFEvaluator
 import shark.execution.GroupByOperator.CommonGroupByState
+import shark.execution.serialization.SerializableOperatorDescriptor
+import shark.execution.serialization.XmlSerializer
+import java.lang.{Integer => JInteger}
+import java.util.{HashMap => JHashMap}
+import java.util.{HashSet => JHashSet}
+import java.util.{Map => JMap}
+import java.util.{Set => JSet}
+import shark.execution.{GroupByOperator => SharkGroupByOperator}
 
 
 // The final phase of group by.
@@ -57,7 +55,9 @@ class GroupByPostShuffleOperator extends UnaryOperator[HiveGroupByOperator]
   @transient private lazy val minReductionHashAggr: Float = hconf.get(HiveConf.ConfVars.HIVEMAPAGGRHASHMINREDUCTION.varname).toFloat
   @transient private lazy val numRowsCompareHashAggr: Int = hconf.get(HiveConf.ConfVars.HIVEGROUPBYMAPINTERVAL.varname).toInt
   
-  @transient private lazy val commonState = CommonGroupByState(conf, new SerializableObjectInspector(objectInspectors.head.asInstanceOf[StructObjectInspector]))
+  @transient private lazy val commonState = CommonGroupByState(
+      new SerializableOperatorDescriptor(conf, XmlSerializer.getUseCompression(hconf)),
+      new SerializableObjectInspector(objectInspectors.head.asInstanceOf[StructObjectInspector]))
   
   private val inputObjectInspectors = new scala.collection.mutable.HashMap[Int, SerializableObjectInspector[ObjectInspector]]
   private val keyValueTableDescs = new scala.collection.mutable.HashMap[Int, (TableDesc, TableDesc)]
@@ -94,11 +94,15 @@ class GroupByPostShuffleOperator extends UnaryOperator[HiveGroupByOperator]
   }
   
   override def initializeHiveTopOperator() {
-    HiveTopOperator.initializeHiveTopOperator(this, inputObjectInspectors.mapValues(_.value).toMap)
+    HiveTopOperator.initializeHiveTopOperator(this)
   }
   
   override def setInputObjectInspector(tag: Int, objectInspector: ObjectInspector) {
-    inputObjectInspectors.put(tag, objectInspector)
+    inputObjectInspectors.put(tag, new SerializableObjectInspector(objectInspector))
+  }
+  
+  override def getInputObjectInspectors(): Map[Int, ObjectInspector] = {
+    inputObjectInspectors.mapValues(_.value).toMap
   }
   
   override def setKeyValueTableDescs(tag: Int, descs: (TableDesc, TableDesc)) {
@@ -194,13 +198,25 @@ object GroupByPostShuffleOperator {
         var i = 0
         val numKeys = commonState.keyFields.length
         while (i < numKeys) {
+          try {
           outputCache(i) = commonState.keyFields(i).evaluate(reusedRow)
           i += 1
+          } catch {
+          case e: NullPointerException => {
+            println(e)
+          }
+        } //TMP FIXME
         }
+        try {
         while (i < numKeys + aggrs.length) {
           outputCache(i) = commonState.aggregationEvals(i - numKeys).evaluate(aggrs(i - numKeys))
           i += 1
         }
+        } catch {
+          case e: NullPointerException => {
+            println(e)
+          }
+        } //TMP FIXME
         outputCache
       }
   
@@ -230,7 +246,7 @@ object GroupByPostShuffleOperator {
     
     override def processPartition(split: Int, iter: Iterator[_]): Iterator[_] = {
       // Sort the input based on the key.
-      val buf = iter.toArray.asInstanceOf[Array[(ReduceKeyReduceSide, Array[Byte])]]
+      val buf = iter.map(_.asInstanceOf[(ReduceKeyReduceSide, Array[Byte])]).toArray
       val sorted = buf.sortWith((x, y) => x._1.compareTo(y._1) < 0).iterator
 
       // Perform sort-based aggregation.

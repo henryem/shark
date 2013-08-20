@@ -34,6 +34,7 @@ import spark.Accumulable
 import shark.execution.serialization.SerializableHiveConf
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
 import shark.execution.serialization.XmlSerializer
+import org.apache.commons.lang.SerializationUtils
 
 
 /**
@@ -86,7 +87,8 @@ class MemoryStoreSinkOperator extends Operator[HiveFileSinkOperator] with Termin
         statsAcc,
         new SerializableObjectInspector(objectInspectors.head),
         initialColumnSize)
-    // Put all rows of the table into a set of TablePartition's. Each partition contains
+    inputRdd.foreach({_ => Unit}) //TMP FIXME
+    // Put all rows of the table into a set of TablePartitions. Each partition contains
     // only one TablePartition object.
     //FIXME: Make PartitionProcessor parametric so that we can have static typing.
     val rdd: RDD[TablePartition] = inputRdd.mapPartitionsWithIndex({ case (idx, iter) =>

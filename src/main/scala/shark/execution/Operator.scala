@@ -31,10 +31,17 @@ import shark.execution.serialization.SerializedHiveOperator
 import shark.execution.serialization.XmlSerializer
 import shark.execution.serialization.SerializableObjectInspector
 import shark.execution.serialization.SerializableObjectInspectors
+import shark.execution.serialization.HiveOperatorWrapper
+import shark.execution.serialization.HiveOperatorSerialization
+import shark.execution.serialization.SerializableHiveConf
+import com.google.common.util.concurrent.SettableFuture
+import com.google.common.util.concurrent.Futures
+import java.util.concurrent.Future
 
 
 trait Operator[T <: HiveOp[_]] extends LogHelper with Serializable {
-  private var _hiveOp: SerializedHiveOperator[T] = _
+//  private var _hiveOp: HiveOperatorWrapper[T] = _
+  private var _hiveOp: T = _
   private val _childOperators = new ArrayBuffer[Operator[_]]()
   private val _parentOperators = new ArrayBuffer[Operator[_]]()
   private var _objectInspectors: SerializableObjectInspectors[ObjectInspector] = new SerializableObjectInspectors(Array.empty)
@@ -61,10 +68,14 @@ trait Operator[T <: HiveOp[_]] extends LogHelper with Serializable {
 
   def hconf = Operator.hconf
   
-  def hiveOp: T = _hiveOp.value
-  def hiveOp_=(newHiveOp: T) {
-    _hiveOp = SerializedHiveOperator.serialize(newHiveOp, XmlSerializer.getUseCompression(hconf))
-  }
+  //FIXME: Currently hconf is not available when hiveOp is being set, so
+  // this is a quick hack around that.  This means Operator is not serializable.
+  def hiveOp: T = _hiveOp
+  def hiveOp_=(newHiveOp: T) { _hiveOp = newHiveOp }
+//  def hiveOp: T = _hiveOp.value
+//  def hiveOp_=(newHiveOp: T) {
+////    _hiveOp = HiveOperatorSerialization.serialize(newHiveOp, hconf, XmlSerializer.getUseCompression(hconf))
+//  }
   
   def objectInspectors = _objectInspectors.value
 
@@ -206,14 +217,15 @@ trait TopOperator[T <: HiveOperator] extends Operator[T]
 
 object Operator extends LogHelper {
 
-  /** A reference to HiveConf for convenience. */
-  //TODO: Remove.
+  /** A reference to the global HiveConf used by all Operators. */
   //FIXME: Replace with a default-constructed HiveConf.
-//  var hconf: HiveConf = _
-  @transient private var _hconf: SerializableWritable[HiveConf] = _
-  def hconf = _hconf.value
+  @transient private var _hconfFuture: SettableFuture[SerializableHiveConf] = SettableFuture.create()
+  def hconf = _hconfFuture.get.value
   def hconf_=(newHconf: HiveConf) {
-    _hconf = new SerializableWritable(newHconf)
+    //FIXME: Use compression?
+    //FIXME: 
+    _hconfFuture.set(new SerializableHiveConf(newHconf, true))
   }
+  def getHconfFuture: Future[SerializableHiveConf] = _hconfFuture
 }
 

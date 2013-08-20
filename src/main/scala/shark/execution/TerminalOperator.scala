@@ -31,30 +31,7 @@ import org.apache.hadoop.hive.ql.exec.{FileSinkOperator => HiveFileSinkOperator}
  * - cache query output
  * - return query as RDD directly (without materializing it)
  */
-trait TerminalOperator extends UnaryOperator[HiveFileSinkOperator] {
-
-  // Create a local copy of hconf and hiveSinkOp so we can XML serialize it.
-//  @BeanProperty var localHiveOp: HiveFileSinkOperator = _
-//  @BeanProperty var localHconf: HiveConf = _
-//  @BeanProperty val now = new Date()
-
-//  override def initialize() {
-//    localHconf = super.hconf
-//    // Set parent to null so we won't serialize the entire query plan.
-//    hiveOp.setParentOperators(null)
-//    hiveOp.setChildOperators(null)
-//    hiveOp.setInputObjInspectors(null)
-//    localHiveOp = hiveOp
-//  }
-//
-//  //FIXME
-//  override def initializeOnSlave() {
-//    localHiveOp.initialize(localHconf, Array(objectInspector))
-//  }
-//
-//  override def makePartitionProcessor() = PartitionProcessor.identity
-}
-
+trait TerminalOperator extends UnaryOperator[HiveFileSinkOperator]
 
 /**
  * Collect the output as a TableRDD.

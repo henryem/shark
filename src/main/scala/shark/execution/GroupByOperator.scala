@@ -39,6 +39,7 @@ import org.apache.hadoop.hive.ql.exec.Utilities
 import org.apache.hadoop.hive.serde2.objectinspector.StandardStructObjectInspector
 import org.apache.hadoop.hive.ql.plan.ExprNodeColumnDesc
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoUtils
+import shark.execution.serialization.SerializableOperatorDescriptor
 
 
 /**
@@ -120,7 +121,7 @@ object GroupByOperator {
    * many values but is safe and efficient to serialize; only @conf and
    * @rowInspectorSer are actually serialized.
    */
-  case class CommonGroupByState(conf: GroupByDesc, rowInspectorSer: SerializableObjectInspector[StructObjectInspector]) {
+  case class CommonGroupByState(confSer: SerializableOperatorDescriptor[GroupByDesc], rowInspectorSer: SerializableObjectInspector[StructObjectInspector]) {
     // Currently this is implemented as a bunch of lazy variables.  This is
     // easy to implement, but perhaps not so easy to read.  Someone may want
     // to rewrite this in a procedural way.  I have attempted to order the
@@ -128,6 +129,7 @@ object GroupByOperator {
     // graph - earlier fields are required by later fields.
     import scala.collection.JavaConversions._
     
+    @transient lazy val conf: GroupByDesc = confSer.value
     @transient lazy val aggregationIsDistinct: Array[Boolean] = conf.getAggregators.map(_.getDistinct).toArray
     @transient lazy val rowInspector = rowInspectorSer.value
     @transient lazy val keyFields: Array[ExprNodeEvaluator] = conf.getKeys().map(k => ExprNodeEvaluatorFactory.get(k)).toArray

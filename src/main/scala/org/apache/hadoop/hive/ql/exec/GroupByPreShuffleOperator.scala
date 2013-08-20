@@ -20,23 +20,27 @@ package org.apache.hadoop.hive.ql.exec
 
 import java.util.{ArrayList => JArrayList, HashMap => JHashMap}
 import scala.collection.JavaConversions._
-import scala.reflect.BeanProperty
 import org.apache.hadoop.hive.conf.HiveConf
 import org.apache.hadoop.hive.ql.exec.{GroupByOperator => HiveGroupByOperator}
 import org.apache.hadoop.hive.ql.plan.{AggregationDesc, ExprNodeDesc, GroupByDesc}
-import org.apache.hadoop.hive.ql.udf.generic.GenericUDAFEvaluator
 import org.apache.hadoop.hive.ql.udf.generic.GenericUDAFEvaluator.AggregationBuffer
 import org.apache.hadoop.hive.serde2.objectinspector.{ObjectInspector, ObjectInspectorFactory,
     ObjectInspectorUtils, StructObjectInspector}
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorUtils.ObjectInspectorCopyOption
 import shark.SharkEnvSlave
-import shark.execution.UnaryOperator
 import shark.execution.SimpleUnaryOperator
 import shark.execution.PartitionProcessor
 import shark.LogHelper
 import shark.execution.serialization.SerializableObjectInspector
 import shark.execution.serialization.SerializableHiveConf
 import shark.execution.serialization.XmlSerializer
+import shark.execution.serialization.SerializableOperatorDescriptor
+import java.util.{ArrayList => JArrayList}
+import java.util.{HashMap => JHashMap}
+import scala.Array.canBuildFrom
+import shark.execution.GroupByOperator.aggregateExistingKey
+import shark.execution.GroupByOperator.aggregateNewKey
+import shark.execution.GroupByOperator.newAggregations
 
 
 /**
@@ -45,7 +49,7 @@ import shark.execution.serialization.XmlSerializer
 class GroupByPreShuffleOperator extends SimpleUnaryOperator[HiveGroupByOperator] {
   override def makePartitionProcessor(): PartitionProcessor = {
     new GroupByPreShuffleOperator.GroupByPreShufflePartitionProcessor(
-        hiveOp.getConf(),
+        new SerializableOperatorDescriptor(hiveOp.getConf(), XmlSerializer.getUseCompression(hconf)),
         new SerializableHiveConf(hconf, XmlSerializer.getUseCompression(hconf)),
         new SerializableObjectInspector(objectInspector))
   }
@@ -53,11 +57,12 @@ class GroupByPreShuffleOperator extends SimpleUnaryOperator[HiveGroupByOperator]
 
 object GroupByPreShuffleOperator {
   private class GroupByPreShufflePartitionProcessor(
-      private val conf: GroupByDesc,
+      private val confSer: SerializableOperatorDescriptor[GroupByDesc],
       private val hconf: SerializableHiveConf,
       private val objectInspector: SerializableObjectInspector[ObjectInspector])
       extends PartitionProcessor with LogHelper {
     import shark.execution.GroupByOperator._
+    @transient private lazy val conf: GroupByDesc = confSer.value
     
     override def processPartition(split: Int, iter: Iterator[_]) = {
       logInfo("Running Pre-Shuffle Group-By")

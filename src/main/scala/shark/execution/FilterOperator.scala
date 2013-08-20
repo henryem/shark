@@ -26,6 +26,8 @@ import org.apache.hadoop.hive.ql.plan.FilterDesc
 import org.apache.hadoop.hive.serde2.objectinspector.PrimitiveObjectInspector
 import shark.execution.serialization.SerializableObjectInspector
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector
+import shark.execution.serialization.SerializableOperatorDescriptor
+import shark.execution.serialization.XmlSerializer
 
 
 class FilterOperator extends SimpleUnaryOperator[HiveFilterOperator] {
@@ -35,18 +37,20 @@ class FilterOperator extends SimpleUnaryOperator[HiveFilterOperator] {
   }
   
   override def makePartitionProcessor(): PartitionProcessor = {
-    new FilterOperator.FilterPartitionProcessor(hiveOp.getConf(), new SerializableObjectInspector(objectInspector))
+    new FilterOperator.FilterPartitionProcessor(
+        new SerializableOperatorDescriptor(hiveOp.getConf(), XmlSerializer.getUseCompression(hconf)),
+        new SerializableObjectInspector(objectInspector))
   }
 }
 
 object FilterOperator {
   private class FilterPartitionProcessor(
-      private val conf: FilterDesc,
+      private val conf: SerializableOperatorDescriptor[FilterDesc],
       private val objectInspector: SerializableObjectInspector[ObjectInspector])
       extends PartitionProcessor {
     override def processPartition(split: Int, iter: Iterator[_]) = {
       val (conditionEvaluator, conditionInspector) = try {
-        val conditionEvaluator = ExprNodeEvaluatorFactory.get(conf.getPredicate())
+        val conditionEvaluator = ExprNodeEvaluatorFactory.get(conf.value.getPredicate())
         val conditionInspector = conditionEvaluator.initialize(objectInspector.value)
           .asInstanceOf[PrimitiveObjectInspector]
         (conditionEvaluator, conditionInspector)

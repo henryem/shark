@@ -39,6 +39,9 @@ trait HiveTopOperator[T <: HiveOperator] extends Operator[T] with LogHelper {
    */ 
   def setInputObjectInspector(tag: Int, objectInspector: ObjectInspector)
   
+  //TODO: Document.
+  def getInputObjectInspectors(): Map[Int, ObjectInspector]
+  
   /**
    * Stores the deser for operators downstream from ReduceSink. This is called
    * by ReduceSink.initializeDownStreamHiveOperators().
@@ -51,7 +54,7 @@ object HiveTopOperator extends LogHelper {
    * A default implementation of initializeHiveTopOperator, to be used
    * optionally by implementors of that trait.
    */ 
-  def initializeHiveTopOperator[T <: HiveOperator](op: HiveTopOperator[T], inputObjectInspectors: Map[Int, ObjectInspector]) {
+  def initializeHiveTopOperator[T <: HiveOperator](op: HiveTopOperator[T]) {
     logInfo("Started executing " + op + " initializeHiveTopOperator()")
 
     // Call initializeDownStreamHiveOperators() of upstream operators that are
@@ -65,6 +68,10 @@ object HiveTopOperator extends LogHelper {
     // Only do initialize if all our input inspectors are ready. We use >
     // instead of == since TableScan doesn't have parents, but have an object
     // inspector. If == is used, table scan is skipped.
+    //NOTE: initializeDownStreamHiveOperator() above may have set the input
+    // ObjectInspectors of this op as a side-effect.  So we need to wait until
+    // now to get them.  This is a bit of a hack.
+    val inputObjectInspectors = op.getInputObjectInspectors
     assert(inputObjectInspectors.size >= reduceSinkParents.size,
       println("# input object inspectors (%d) < # reduce sink parent operators (%d)".format(
           inputObjectInspectors.size, reduceSinkParents.size)))

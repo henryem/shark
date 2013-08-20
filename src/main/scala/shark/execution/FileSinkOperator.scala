@@ -35,6 +35,8 @@ import shark.execution.serialization.SerializableHiveOperator
 import shark.execution.serialization.SerializedHiveOperator
 import shark.execution.serialization.XmlSerializer
 import org.apache.hadoop.hive.ql.plan.FileSinkDesc
+import shark.execution.serialization.HiveOperatorSerialization
+import shark.execution.serialization.HiveOperatorWrapper
 
 
 class FileSinkOperator extends Operator[HiveFileSinkOperator] with TerminalOperator {
@@ -45,7 +47,8 @@ class FileSinkOperator extends Operator[HiveFileSinkOperator] with TerminalOpera
     val now = new Date()
     val thisString = this.toString()
     val operatorsString = this.objectInspectors.toString()
-    val serializedHiveOp = SerializedHiveOperator.serialize(hiveOp, XmlSerializer.getUseCompression(hconf))
+    val useCompression = XmlSerializer.getUseCompression(hconf)
+    val serializedHiveOp = HiveOperatorSerialization.serialize(hiveOp, new SerializableHiveConf(hconf, useCompression), useCompression)
     val partitionProcessor = new FileSinkOperator.FileSinkPartitionProcessor(
         serializedHiveOp, new SerializableHiveConf(hconf, XmlSerializer.getUseCompression(hconf)), now, outputFileExtension, thisString, operatorsString)
     
@@ -79,7 +82,7 @@ class FileSinkOperator extends Operator[HiveFileSinkOperator] with TerminalOpera
 
 object FileSinkOperator {
   private class FileSinkPartitionProcessor(
-      private val serializedHiveOp: SerializedHiveOperator[HiveFileSinkOperator],
+      private val serializedHiveOp: HiveOperatorWrapper[HiveFileSinkOperator],
       private val hiveConf: SerializableHiveConf,
       private val now: Date,
       private val outputFileExtension: String,

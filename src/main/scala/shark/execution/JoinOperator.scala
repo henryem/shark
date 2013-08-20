@@ -41,11 +41,15 @@ class JoinOperator extends Operator[HiveJoinOperator] with NaryOperator[HiveJoin
   private val keyValueTableDescs = new scala.collection.mutable.HashMap[Int, (TableDesc, TableDesc)]
   
   override def initializeHiveTopOperator() {
-    HiveTopOperator.initializeHiveTopOperator(this, inputObjectInspectors.mapValues(_.value).toMap)
+    HiveTopOperator.initializeHiveTopOperator(this)
   }
 
   override def setInputObjectInspector(tag: Int, objectInspector: ObjectInspector) {
     inputObjectInspectors.put(tag, new SerializableObjectInspector(objectInspector))
+  }
+
+  override def getInputObjectInspectors(): Map[Int, ObjectInspector] = {
+    inputObjectInspectors.mapValues(_.value).toMap
   }
   
   override def setKeyValueTableDescs(tag: Int, descs: (TableDesc, TableDesc)) {

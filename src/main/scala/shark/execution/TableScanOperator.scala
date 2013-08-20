@@ -57,6 +57,10 @@ class TableScanOperator extends UnaryOperator[HiveTableScanOperator]
     inputObjectInspectors.put(tag, new SerializableObjectInspector(objectInspector))
   }
   
+  override def getInputObjectInspectors(): Map[Int, ObjectInspector] = {
+    inputObjectInspectors.mapValues(_.value).toMap
+  }
+  
   /**
    * Set some properties of the table to be scanned.  This must be called
    * before initializeHiveTopOperator() or execute().  Currently it is called
@@ -113,8 +117,12 @@ class TableScanOperator extends UnaryOperator[HiveTableScanOperator]
       }
     }
 
+    
+    // Most HiveTopOperators receive an ObjectInspector from a suitably-
+    // initialized parent ReduceSinkOperator inside HiveTopOperator.initializeHiveTopOperator.
+    // TableScan has no such parent, and instead populates its own ObjectInspector.
     setInputObjectInspector(0, rowObjectInspector)
-    HiveTopOperator.initializeHiveTopOperator(this, inputObjectInspectors.mapValues(_.value).toMap)
+    HiveTopOperator.initializeHiveTopOperator(this)
   }
 
   override def execute(): RDD[_] = {
@@ -128,11 +136,14 @@ class TableScanOperator extends UnaryOperator[HiveTableScanOperator]
 
     val cacheMode = CacheType.fromString(
       tableDesc.getProperties().get("shark.cache").asInstanceOf[String])
-    cacheMode match {
+    //TMP FIXME
+    val resultRdd = cacheMode match {
       case CacheType.heap => loadFromSpark(tableKey)
       case CacheType.tachyon => loadFromTachyon(tableKey)
       case _ => loadFromHive()
     }
+    resultRdd.foreach({_ => Unit})
+    resultRdd
   }
   
   private def loadFromTachyon(tableKey: String): RDD[_] = {
@@ -207,7 +218,11 @@ class TableScanOperator extends UnaryOperator[HiveTableScanOperator]
   
   private def loadFromHive(): RDD[_] = {
     val deserializer = new TableScanOperator.HiveDeserializingProcessor(tableDesc, new SerializableHiveConf(hconf, XmlSerializer.getUseCompression(hconf)))
-    getRdd().mapPartitionsWithIndex(deserializer.processPartition _)
+    val possiblySerializedRdd = getRdd()
+    possiblySerializedRdd.foreach{_ => Unit} //TMP FIXME
+    val deserializedRdd = possiblySerializedRdd.mapPartitionsWithIndex(deserializer.processPartition _)
+    possiblySerializedRdd.foreach{_ => Unit} //TMP FIXME
+    deserializedRdd
   }
 
   /**
@@ -323,7 +338,7 @@ class TableScanOperator extends UnaryOperator[HiveTableScanOperator]
     // it is smaller than what Spark suggests.
     val minSplits = math.max(hconf.getInt("mapred.map.tasks", 1), SharkEnv.sc.defaultMinSplits)
     val rdd = SharkEnv.sc.hadoopRDD(conf, ifc, classOf[Writable], classOf[Writable], minSplits)
-
+    rdd.foreach({_ => Unit}) //TMP FIXME
     // Only take the value (skip the key) because Hive works only with values.
     rdd.map(_._2)
   }
