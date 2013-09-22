@@ -1,5 +1,6 @@
 package blinkdb
 import shark.LogHelper
+import scala.util.Sorting
 
 /** The output of a single run of a query. */
 case class SingleQueryIterateOutput(rows: Seq[Seq[Double]], numRows: Int, numFields: Int) {
@@ -30,6 +31,10 @@ trait ErrorQuantification {
 
 case class StandardDeviationError(stdDev: Double) extends ErrorQuantification {
   override def toDouble = stdDev
+}
+
+case class CenteredConfidenceInterval(intervalRadius: Double) extends ErrorQuantification {
+  override def toDouble = intervalRadius
 }
 
 object ErrorQuantifications {
@@ -79,5 +84,25 @@ case object StandardDeviationErrorQuantifier extends ErrorQuantifier[StandardDev
     } else {
       math.sqrt((sumSq - sum*sum/count) / count)
     }
+  }
+}
+
+case class CenteredConfidenceIntervalErrorQuantifier(
+    alpha: Double)
+    extends ErrorQuantifier[CenteredConfidenceInterval] with LogHelper {
+  override def computeSingleFieldError(singleFieldValues: Seq[Double]): CenteredConfidenceInterval = {
+    CenteredConfidenceInterval(confidenceIntervalRadius(singleFieldValues, alpha))
+  }
+  
+  def confidenceIntervalRadius(numbers: Seq[Double], alpha: Double): Double = {
+    logDebug("Computing an %f-confidence interval for %s".format(alpha, numbers))
+    //TODO: This is inefficient.
+    val numbersMutableArray = numbers.toArray
+    Sorting.quickSort(numbersMutableArray)
+    val lowerQuantile = (1-alpha)/2.0
+    val upperQuantile = (1+alpha)/2.0
+    val lowItemIdx = math.max(0, math.floor(numbersMutableArray.size * lowerQuantile).asInstanceOf[Int])
+    val highItemIdx = math.min(numbersMutableArray.size-1, math.ceil(numbersMutableArray.size * upperQuantile).asInstanceOf[Int])
+    (numbersMutableArray(highItemIdx) - numbersMutableArray(lowItemIdx)) / 2.0
   }
 }

@@ -49,6 +49,7 @@ object DiagnosticRunner extends LogHelper {
   /**
    * @param inputRdd must be cached.
    */
+  //TODO: Add the point estimate as an argument here.
   def doDiagnostic[E <: ErrorQuantification, B <: QueryExecutionBuilder[B]](
       queryBuilder: B,
       inputRdd: RDD[Any],
